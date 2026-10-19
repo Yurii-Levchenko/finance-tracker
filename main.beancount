@@ -23,4 +23,36 @@ option "operating_currency" "PLN"
   Assets:Банк:Поточний       4500.00 PLN
   Equity:Початковий-Залишок
 
+; Збережені запити (у Fava — вкладка Query). Місяць показано його першим днем.
+2026-07-31 query "1 Витрати за категоріями" "
+  SELECT yearmonth(date) AS month, account, sum(number) AS amount
+  WHERE root(account, 1) = 'Expenses'
+  GROUP BY month, account
+  ORDER BY month, amount DESC"
+
+2026-07-31 query "2 Норма заощаджень" "
+  SELECT yearmonth(date) AS month,
+         -sum(number * int(root(account, 1) = 'Income')) AS income,
+         sum(number * int(root(account, 1) = 'Expenses')) AS expenses,
+         -sum(number) AS saved,
+         round(100 * sum(number) / sum(number * int(root(account, 1) = 'Income')), 1) AS rate_pct,
+         max(date) AS last_operation
+  WHERE root(account, 1) IN ('Income', 'Expenses')
+  GROUP BY month
+  ORDER BY month"
+
+2026-07-31 query "3 Фіксовані і змінні" "
+  SELECT yearmonth(date) AS month,
+         sum(number * int('fixed' IN tags)) AS fixed,
+         sum(number * int(NOT 'fixed' IN tags)) AS variable,
+         sum(number) AS total
+  WHERE root(account, 1) = 'Expenses'
+  GROUP BY month
+  ORDER BY month"
+
+2026-07-31 query "4 Без категорії" "
+  SELECT yearmonth(date) AS month, date, narration, number AS amount
+  WHERE account = 'Expenses:Без-Категорії'
+  ORDER BY date"
+
 include "transactions.beancount"
