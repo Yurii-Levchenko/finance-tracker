@@ -58,4 +58,11 @@ option "operating_currency" "PLN"
   WHERE account = 'Expenses:Без-Категорії'
   ORDER BY date"
 
+; Наростаючий підсумок change по місяцях = залишок на рахунку на кінець місяця.
+2026-07-31 query "5 Рух по рахунку" "
+  SELECT yearmonth(date) AS month, sum(number) AS change, max(date) AS last_operation
+  WHERE account = 'Assets:Банк:Поточний'
+  GROUP BY month
+  ORDER BY month"
+
 include "transactions.beancount"
