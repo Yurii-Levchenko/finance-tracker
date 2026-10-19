@@ -1,0 +1,10 @@
+[project]
+name = "my-finance"
+version = "0.1.0"
+description = "Особистий фінансовий трекер на Beancount 3 (WIT 5.0, заняття 7)"
+requires-python = ">=3.12"
+dependencies = [
+    "beancount>=3.2,<4",
+    "beanquery",
+    "fava",
+]

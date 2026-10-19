@@ -1,0 +1,17 @@
+шаблон,рахунок,фіксована
+Rent,Expenses:Житло,так
+Salary,Income:Зарплата,ні
+Biedronka,Expenses:Продукти,ні
+Lidl,Expenses:Продукти,ні
+Żabka,Expenses:Продукти,ні
+Carrefour,Expenses:Продукти,ні
+Bar Mleczny,Expenses:Кафе,ні
+Starbucks,Expenses:Кафе,ні
+Bolt Food,Expenses:Доставка-Їжі,ні
+Wolt,Expenses:Доставка-Їжі,ні
+Bolt,Expenses:Транспорт,ні
+Uber,Expenses:Транспорт,ні
+ZTM,Expenses:Транспорт,так
+Netflix,Expenses:Підписки,так
+Spotify,Expenses:Підписки,так
+Claude.ai,Expenses:Підписки,так

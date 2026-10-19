@@ -1,0 +1,8 @@
+# Особисті фінанси — ніколи не комітимо
+data/
+transactions.beancount
+report.html
+
+# Службові файли Python і uv
+.venv/
+__pycache__/
