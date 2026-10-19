@@ -1,0 +1,26 @@
+; Облік Олі. Операції й звірку з банком генерує import.py у transactions.beancount.
+
+option "title" "Фінанси Олі"
+option "operating_currency" "PLN"
+
+; Рахунки
+2026-07-31 open Assets:Банк:Поточний          PLN
+2026-07-31 open Equity:Початковий-Залишок     PLN
+
+2026-07-31 open Income:Зарплата               PLN
+2026-07-31 open Income:Інше                   PLN
+
+2026-07-31 open Expenses:Житло                PLN
+2026-07-31 open Expenses:Продукти             PLN
+2026-07-31 open Expenses:Кафе                 PLN
+2026-07-31 open Expenses:Доставка-Їжі         PLN
+2026-07-31 open Expenses:Транспорт            PLN
+2026-07-31 open Expenses:Підписки             PLN
+2026-07-31 open Expenses:Без-Категорії        PLN
+
+; Початковий залишок
+2026-07-31 * "Початковий залишок"
+  Assets:Банк:Поточний       4500.00 PLN
+  Equity:Початковий-Залишок
+
+include "transactions.beancount"
