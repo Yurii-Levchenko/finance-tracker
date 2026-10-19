@@ -278,7 +278,7 @@ const pct = v => v.toFixed(1).replace('.', ',') + ' %';
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const mName = m => m.name + (m.incomplete ? ' (до ' + m.until + ')' : '');
-const mShort = m => m.name.slice(0, 3) + (m.incomplete ? '*' : '');
+const mShort = m => m.name + (m.incomplete ? '*' : '');
 const nf0 = new Intl.NumberFormat('uk-UA', {maximumFractionDigits: 0});
 // Послідовна шкала одного відтінку (синій), від світлого до темного.
 // Лише світлі кроки, щоб таблиця не була важкою, текст скрізь темний.
@@ -345,7 +345,7 @@ function heat() {
 // Питання 2: лінія норми заощаджень по місяцях.
 function rateLine() {
   const box = $('#rate'), W = box.clientWidth, H = 200;
-  const L = 36, R = 24, T = 26, B = 30;
+  const L = 36, R = 36, T = 26, B = 30;
   const max = Math.max(60, Math.ceil(Math.max(...M.map(m => m.rate)) / 20) * 20);
   const x = i => M.length === 1 ? (L + W - R) / 2 : L + i * (W - L - R) / (M.length - 1);
   const y = v => T + (1 - v / max) * (H - T - B);
@@ -368,7 +368,7 @@ function rateLine() {
     s += `<circle cx="${px}" cy="${py}" r="${r + 2}" fill="var(--surface)"/>`;
     s += `<circle cx="${px}" cy="${py}" r="${r}" fill="${fill}" stroke="var(--s1)" stroke-width="2"/>`;
     s += `<text class="lbl" x="${px}" y="${py - 12}" text-anchor="middle">${pct(m.rate)}</text>`;
-    // На вузькому екрані повні назви налазять одна на одну — беремо короткі.
+    // На вузькому екрані «(до 15.10)» не влазить — лишаємо назву місяця із зірочкою.
     const name = (W - L - R) / M.length < 130 ? mShort(m) : mName(m);
     s += `<text x="${px}" y="${H - 8}" text-anchor="middle"${i === sel ? ' style="fill:var(--ink);font-weight:600"' : ''}>${esc(name)}</text>`;
     s += `<rect class="hit" data-i="${i}" data-tip="${esc(mName(m))}: норма ${esc(pct(m.rate))}<br>відкладено ${esc(money(m.saved))}" x="${px - 30}" y="${T - 10}" width="60" height="${H - T - B + 10}" fill="transparent" style="cursor:pointer"/>`;
