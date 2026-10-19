@@ -16,6 +16,9 @@ option "operating_currency" "PLN"
 2026-07-31 open Expenses:Доставка-Їжі         PLN
 2026-07-31 open Expenses:Транспорт            PLN
 2026-07-31 open Expenses:Підписки             PLN
+2026-07-31 open Expenses:Звязок               PLN
+2026-07-31 open Expenses:Дім-і-Косметика      PLN
+2026-07-31 open Expenses:Спорт                PLN
 2026-07-31 open Expenses:Без-Категорії        PLN
 
 ; Початковий залишок
