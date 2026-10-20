@@ -2,7 +2,8 @@
 
 Читає всі CSV з data/ і правила з rules.csv, повністю перезаписує
 transactions.beancount: операції за категоріями і balance-твердження
-із залишку банку на кінець кожного місяця.
+із залишку банку на кінець кожного місяця. Наприкінці дописує ручні дані
+з accounts.csv і manual.csv (див. manual.py).
 
 Запуск: uv run python import.py
 """
@@ -12,6 +13,8 @@ import datetime as dt
 import sys
 from decimal import Decimal
 from pathlib import Path
+
+import manual
 
 # Консоль Windows за замовчуванням не друкує українські літери.
 sys.stdout.reconfigure(encoding="utf-8")
@@ -115,13 +118,16 @@ def main():
         *(transaction(row, rules) + "\n" for row in rows),
         "; Звірка з банком: залишок з колонки Balance на кінець кожного місяця.\n",
         *balance_assertions(rows),
+        "\n",
+        manual.beancount_text(manual.read_accounts(), manual.read_operations()),
     ]
     OUTPUT_FILE.write_text("".join(parts), encoding="utf-8", newline="\n")
     uncategorized = sum(
         1 for r in rows
         if categorize(r["description"], r["amount"], rules)[0] in (UNCATEGORIZED_EXPENSE, UNCATEGORIZED_INCOME)
     )
-    print(f"Операцій: {len(rows)}, без категорії: {uncategorized}. Записано {OUTPUT_FILE.name}.")
+    print(f"Операцій з виписки: {len(rows)}, без категорії: {uncategorized}; "
+          f"ручних: {len(manual.read_operations())}. Записано {OUTPUT_FILE.name}.")
 
 
 if __name__ == "__main__":

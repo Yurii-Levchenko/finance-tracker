@@ -6,3 +6,7 @@ report.html
 # Службові файли Python і uv
 .venv/
 __pycache__/
+
+# Ручні дані — теж особисті фінанси
+accounts.csv
+manual.csv

@@ -28,7 +28,7 @@ OUTPUT = ROOT / "report.html"
 Q_CATEGORIES = "1 Витрати за категоріями"
 Q_SAVINGS = "2 Норма заощаджень"
 Q_FIXED = "3 Фіксовані і змінні"
-Q_ACCOUNT = "5 Рух по рахунку"
+Q_ACCOUNT = "5 Рух по рахунках"
 
 # Подушка безпеки: ціль — стільки місяців середніх витрат, і дата, до якої Оля хоче її мати
 # («до літа» — до 1 червня 2027).
@@ -166,7 +166,7 @@ def plural(n, one, few, many):
 
 
 def cushion(results, months):
-    """Подушка = залишок на рахунку на кінець останнього повного місяця.
+    """Подушка = гроші на всіх рахунках (Assets) на кінець останнього повного місяця.
 
     Посеред неповного місяця на рахунку лежить ще не витрачена зарплата, тож його
     залишок до подушки не рахуємо. Ціль і прогноз — за середніми повних місяців.
@@ -524,7 +524,7 @@ function texts() {
 function goal() {
   const c = D.cushion, share = Math.min(100, c.now / c.target * 100);
   const have = c.have_months.toFixed(1).replace('.', ',');
-  $('#goal-sub').textContent = `Ціль — ${c.months} × середні витрати повного місяця (${money(c.avg_expenses)}) = ${money(c.target)}. Подушка — це залишок на рахунку ${c.now_at}.`;
+  $('#goal-sub').textContent = `Ціль — ${c.months} × середні витрати повного місяця (${money(c.avg_expenses)}) = ${money(c.target)}. Подушка — це гроші на всіх рахунках ${c.now_at}.`;
   $('#goal-progress').innerHTML = `<div class="progress"><span><b>${money(c.now)}</b> — ${have} з ${c.months} місяців витрат</span><span>${Math.round(share)} % цілі</span></div>
     <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(share)}" aria-label="Прогрес до цілі"><i style="width:${share.toFixed(1)}%"></i></div>`;
   const status = c.on_track ? `встигаєте до ${c.deadline}` : `не встигаєте до ${c.deadline}`;
@@ -534,7 +534,7 @@ function goal() {
     ['Буде готова', c.reach || '—', status, c.on_track ? 'good' : 'bad'],
   ].map(([k, v, d, cls]) => `<div class="tile"><p class="k">${k}</p><p class="v ${cls}">${esc(v)}</p><p class="d">${esc(d)}</p></div>`).join('');
   $('#goal-note').textContent = c.latest === null ? '' :
-    `На ${c.latest_at} на рахунку вже ${money(c.latest)}, але частину цих грошей ще буде витрачено до кінця місяця, тому до подушки рахуємо залишок ${c.now_at}. Пунктир — прогноз, якщо відкладати по ${money(c.avg_saved)} на місяць.`;
+    `На ${c.latest_at} на рахунках уже ${money(c.latest)}, але частину цих грошей ще буде витрачено до кінця місяця, тому до подушки рахуємо залишок ${c.now_at}. Пунктир — прогноз, якщо відкладати по ${money(c.avg_saved)} на місяць.`;
   $('#c0').textContent = c.conclusion;
   goalLine();
 }
