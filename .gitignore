@@ -1,5 +1,4 @@
-# Особисті фінанси — ніколи не комітимо
-data/
+# Згенероване — відтворюється командою з README
 transactions.beancount
 report.html
 
@@ -7,6 +6,6 @@ report.html
 .venv/
 __pycache__/
 
-# Ручні дані — теж особисті фінанси
+# Ручні дані (готівка, рахунки з app.py) — особисті, у git не потрапляють
 accounts.csv
 manual.csv

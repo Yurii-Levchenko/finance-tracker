@@ -1,10 +1,12 @@
-; Облік Олі. Операції й звірку з банком генерує import.py у transactions.beancount.
+; Облік Олі й Марка. Операції й звірку з банком генерує import.py у transactions.beancount.
+; Чия операція — тег #olya або #marko; категорії витрат спільні.
 
-option "title" "Фінанси Олі"
+option "title" "Фінанси Олі й Марка"
 option "operating_currency" "PLN"
 
 ; Рахунки
 2026-07-31 open Assets:Банк:Поточний          PLN
+2026-07-31 open Assets:Банк:Марко             PLN
 2026-07-31 open Equity:Початковий-Залишок     PLN
 
 2026-07-31 open Income:Зарплата               PLN
@@ -19,11 +21,18 @@ option "operating_currency" "PLN"
 2026-07-31 open Expenses:Звязок               PLN
 2026-07-31 open Expenses:Дім-і-Косметика      PLN
 2026-07-31 open Expenses:Спорт                PLN
+2026-07-31 open Expenses:Комунальні           PLN
+2026-07-31 open Expenses:Розваги              PLN
+2026-07-31 open Expenses:Покупки              PLN
 2026-07-31 open Expenses:Без-Категорії        PLN
 
-; Початковий залишок
-2026-07-31 * "Початковий залишок"
+; Початкові залишки на 31.07.2026
+2026-07-31 * "Початковий залишок" #olya
   Assets:Банк:Поточний       4500.00 PLN
+  Equity:Початковий-Залишок
+
+2026-07-31 * "Початковий залишок" #marko
+  Assets:Банк:Марко          2860.40 PLN
   Equity:Початковий-Залишок
 
 ; Збережені запити (у Fava — вкладка Query). Місяць показано його першим днем.

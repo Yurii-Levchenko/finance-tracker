@@ -20,7 +20,7 @@ MANUAL_FILE = ROOT / "manual.csv"
 ACCOUNT_FIELDS = ["рахунок", "тип", "назва", "відкрито", "стартовий залишок"]
 MANUAL_FIELDS = ["id", "дата", "тип", "опис", "сума", "категорія", "рахунок", "фіксована"]
 
-BANK_ACCOUNT = "Assets:Банк:Поточний"
+BANK_ACCOUNTS = ("Assets:Банк:Поточний", "Assets:Банк:Марко")
 OPENING_ACCOUNT = "Equity:Початковий-Залишок"
 CURRENCY = "PLN"
 # Тип рахунку в accounts.csv → корінь у Beancount.
@@ -123,7 +123,7 @@ def validate(accounts, operations, known):
                 return f"{readable(op['категорія'])} не підходить як категорія {kind}."
             if not op["рахунок"].startswith("Assets:") or op["рахунок"] not in opened:
                 return f"Рахунок {readable(op['рахунок'])} не знайдено — оберіть інший."
-            if op["рахунок"] == BANK_ACCOUNT:
+            if op["рахунок"] in BANK_ACCOUNTS:
                 return "Операції банківського рахунку беруться з виписки — вручну їх не додаємо."
             for account in (op["категорія"], op["рахунок"]):
                 if date < opened[account]:
