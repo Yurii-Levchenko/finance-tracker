@@ -1,4 +1,5 @@
-"""Звіт Олі: виконує збережені запити 1–3 і 5 з main.beancount і генерує report.html.
+"""Звіт Олі й Марка: виконує збережені запити 1–3 і 5 окремо для Олі, для Марка і разом
+і генерує report.html з перемикачем «Оля / Марко / Разом».
 
 Сторінка українською, без зовнішніх файлів і бібліотек: дані вбудовані в сторінку
 як JSON, графіки малює вбудований скрипт у SVG під ширину екрана.
@@ -47,18 +48,32 @@ MONTHS_GEN = ["", "січня", "лютого", "березня", "квітня"
 
 # ---------- Дані ----------
 
-def run_saved_queries():
-    """Виконує збережені запити з main.beancount; повертає {назва: [рядки як dict]}."""
+# Чий звіт: тег власника (#olya / #marko) або None — обидва разом.
+VIEWS = [("olya", "Оля"), ("marko", "Марко"), (None, "Разом")]
+
+
+def for_owner(query, owner):
+    """Додає до збереженого запиту фільтр «лише операції цього власника»."""
+    return query if owner is None else query.replace("WHERE ", f"WHERE '{owner}' IN tags AND ", 1)
+
+
+def open_ledger():
+    """Завантажує облік; повертає (з'єднання для запитів, {назва: текст збереженого запиту})."""
     entries, errors, options = loader.load_file(str(LEDGER))
     if errors:
         raise SystemExit(f"Облік має помилки, спершу запустіть bean-check: {errors[0].message}")
     saved = {e.name: e.query_string for e in entries if isinstance(e, data.Query)}
     conn = beanquery.connect("beancount:", entries=entries, errors=errors, options=options)
+    return conn, saved
+
+
+def run_saved_queries(conn, saved, owner=None):
+    """Виконує збережені запити 1–3 і 5 для одного власника (або для обох); {назва: [рядки як dict]}."""
     results = {}
     for name in (Q_CATEGORIES, Q_SAVINGS, Q_FIXED, Q_ACCOUNT):
         if name not in saved:
             raise SystemExit(f"У main.beancount немає збереженого запиту «{name}».")
-        cursor = conn.execute(saved[name])
+        cursor = conn.execute(for_owner(saved[name], owner))
         columns = [c.name for c in cursor.description]
         results[name] = [dict(zip(columns, row)) for row in cursor.fetchall()]
     return results
@@ -131,10 +146,13 @@ def categories_conclusion(info, prev, prev_month):
 
 
 def savings_conclusion(info, prev):
+    if info["rate"] is None:
+        return (f"Доходу за цей період ще не було (зарплата приходить наприкінці місяця), тому норму "
+                f"заощаджень порахувати не можна. Витрачено {money(info['expenses'])}.")
     text = f"Ви відклали {money(info['saved'])} з {money(info['income'])} доходу"
     if info["incomplete"]:
         text += ", але місяць ще не закінчився, тож норма поки завищена"
-    elif prev:
+    elif prev and prev["rate"] is not None:
         diff = info["rate"] - prev["rate"]
         if diff:
             points = f"{abs(diff):.1f}".replace(".", ",")
@@ -271,7 +289,8 @@ def page_data(months, results):
             "income": float(info["income"]),
             "expenses": float(info["expenses"]),
             "saved": float(info["saved"]),
-            "rate": float(info["rate"]),
+            # Місяць без доходу (зарплата ще не прийшла) — норму заощаджень порахувати не можна.
+            "rate": float(info["rate"]) if info["rate"] is not None else None,
             "fixed": float(info["fixed"]),
             "variable": float(info["variable"]),
             "categories": {n: float(info["categories"].get(n, 0)) for n in order},
@@ -317,11 +336,12 @@ header h1{font-size:28px;line-height:1.2;margin:0 0 4px;font-weight:650}
 header p{margin:0;color:var(--ink-2)}
 .switch{position:sticky;top:0;z-index:5;background:var(--page);padding:14px 0 12px;margin:0 0 6px;
 display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.switch button{font:inherit;font-size:15px;border:1px solid var(--border);background:var(--surface);
+.switch button,.who button{font:inherit;font-size:15px;border:1px solid var(--border);background:var(--surface);
 color:var(--ink);padding:7px 14px;border-radius:999px;cursor:pointer}
-.switch button:hover{border-color:var(--axis)}
-.switch button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-.switch button:focus-visible,.hit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.switch button:hover,.who button:hover{border-color:var(--axis)}
+.switch button[aria-pressed=true],.who button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.switch button:focus-visible,.who button:focus-visible,.hit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.who{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
 .switch .note{color:var(--muted);font-size:14px;margin-left:4px}
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 16px}
 .tile{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px}
@@ -387,13 +407,14 @@ footer{color:var(--muted);font-size:13px;margin-top:24px}
 """
 
 JS = r"""
-const D = JSON.parse(document.getElementById('data').textContent);
-const M = D.months;
+// Дані для кожного звіту: Оля, Марко, разом. D і M — поточний звіт, міняються перемикачем.
+const ALL = JSON.parse(document.getElementById('data').textContent);
+let D = ALL.views[0], M = D.months;
 let sel = M.length - 1;
 const $ = s => document.querySelector(s);
 const nf = new Intl.NumberFormat('uk-UA', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const money = v => nf.format(v) + ' зл';
-const pct = v => v.toFixed(1).replace('.', ',') + ' %';
+const pct = v => v == null ? '—' : v.toFixed(1).replace('.', ',') + ' %';
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const mName = m => m.name + (m.incomplete ? ' (до ' + m.until + ')' : '');
@@ -408,6 +429,7 @@ function delta(cur, prev, unit, upIsBad) {
   const m = M[sel], p = M[sel - 1];
   if (!p) return 'перший місяць у даних';
   if (m.incomplete) return 'дані до ' + m.until + ', порівнювати зарано';
+  if (cur == null || prev == null) return 'доходу не було, порівнювати нема з чим';
   const d = cur - prev;
   if (Math.abs(d) < 0.005) return 'як у ' + p.loc;
   const up = d > 0, good = up !== upIsBad;
@@ -465,7 +487,7 @@ function heat() {
 function rateLine() {
   const box = $('#rate'), W = box.clientWidth, H = 200;
   const L = 36, R = 36, T = 26, B = 30;
-  const max = Math.max(60, Math.ceil(Math.max(...M.map(m => m.rate)) / 20) * 20);
+  const max = Math.max(60, Math.ceil(Math.max(...M.filter(m => m.rate != null).map(m => m.rate)) / 20) * 20);
   const x = i => M.length === 1 ? (L + W - R) / 2 : L + i * (W - L - R) / (M.length - 1);
   const y = v => T + (1 - v / max) * (H - T - B);
   let s = `<svg class="chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Норма заощаджень по місяцях">`;
@@ -473,16 +495,24 @@ function rateLine() {
     s += `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}" stroke="${g ? 'var(--grid)' : 'var(--axis)'}" stroke-width="1"/>`;
     s += `<text x="${L - 8}" y="${y(g) + 4}" text-anchor="end">${g}%</text>`;
   }
-  const pts = M.map((m, i) => [x(i), y(m.rate)]);
-  s += `<path d="M${pts[0][0]},${y(0)} ${pts.map(p => 'L' + p.join(',')).join(' ')} L${pts.at(-1)[0]},${y(0)}Z" fill="var(--s1)" opacity=".1"/>`;
+  const pts = M.map((m, i) => [x(i), m.rate == null ? null : y(m.rate)]);
+  const has = pts.map((p, i) => i).filter(i => pts[i][1] != null);
+  if (has.length) s += `<path d="M${pts[has[0]][0]},${y(0)} ${has.map(i => 'L' + pts[i].join(',')).join(' ')} L${pts[has.at(-1)][0]},${y(0)}Z" fill="var(--s1)" opacity=".1"/>`;
   // Відрізок до неповного місяця — пунктир: значення ще зміниться.
-  pts.forEach((p, i) => {
-    if (!i) return;
-    const dash = M[i].incomplete ? ' stroke-dasharray="4 4"' : '';
-    s += `<line x1="${pts[i - 1][0]}" y1="${pts[i - 1][1]}" x2="${p[0]}" y2="${p[1]}" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"${dash}/>`;
+  has.forEach((i, k) => {
+    if (!k) return;
+    const j = has[k - 1], dash = M[i].incomplete ? ' stroke-dasharray="4 4"' : '';
+    s += `<line x1="${pts[j][0]}" y1="${pts[j][1]}" x2="${pts[i][0]}" y2="${pts[i][1]}" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"${dash}/>`;
   });
   M.forEach((m, i) => {
-    const [px, py] = pts[i], r = i === sel ? 6 : 4.5;
+    const px = pts[i][0], py = pts[i][1] ?? y(0), r = i === sel ? 6 : 4.5;
+    if (pts[i][1] == null) {
+      s += `<text x="${px}" y="${y(0) - 8}" text-anchor="middle">без доходу</text>`;
+      const name0 = (W - L - R) / M.length < 130 ? mShort(m) : mName(m);
+      s += `<text x="${px}" y="${H - 8}" text-anchor="middle"${i === sel ? ' style="fill:var(--ink);font-weight:600"' : ''}>${esc(name0)}</text>`;
+      s += `<rect class="hit" data-i="${i}" data-tip="${esc(mName(m))}: доходу не було" x="${px - 30}" y="${T - 10}" width="60" height="${H - T - B + 10}" fill="transparent" style="cursor:pointer"/>`;
+      return;
+    }
     const fill = m.incomplete ? 'var(--surface)' : 'var(--s1)';
     s += `<circle cx="${px}" cy="${py}" r="${r + 2}" fill="var(--surface)"/>`;
     s += `<circle cx="${px}" cy="${py}" r="${r}" fill="${fill}" stroke="var(--s1)" stroke-width="2"/>`;
@@ -501,7 +531,7 @@ function stack() {
   const parts = [['Фіксовані', 'fixed', 'var(--s1)', '#fff'], ['Змінні', 'variable', 'var(--s2)', '#fff'], ['Відкладено', 'saved', 'var(--s3)', '#0b0b0b']];
   $('#stack-legend').innerHTML = parts.map(([n, , c]) => `<li><i style="background:${c}"></i>${n}</li>`).join('');
   $('#stack').innerHTML = M.map((m, i) => {
-    const segs = parts.map(([n, k, c, fg]) => {
+    const segs = !m.income ? '<div class="seg" style="flex:1 0 0;background:var(--track);color:var(--ink-2)">доходу ще не було</div>' : parts.map(([n, k, c, fg]) => {
       const v = m[k], w = v / m.income * 100;
       return `<div class="seg hit" style="flex:${w} 0 0;background:${c};color:${fg}" data-label="${pct(w)}" data-tip="${esc(mName(m))} · ${n}: ${esc(money(v))} (${esc(pct(w))} доходу)"></div>`;
     }).join('');
@@ -594,10 +624,29 @@ function render() { texts(); tiles(); categoryBars(); heat(); rateLine(); stack(
 
 function select(i) { sel = i; render(); }
 
-$('#switch').innerHTML = M.map((m, i) =>
-  `<button type="button" data-i="${i}">${esc(m.name)}${m.incomplete ? ' *' : ''}</button>`).join('') +
-  (M.some(m => m.incomplete) ? `<span class="note">* неповний місяць</span>` : '');
+function monthSwitch() {
+  $('#switch').innerHTML = M.map((m, i) =>
+    `<button type="button" data-i="${i}">${esc(m.name)}${m.incomplete ? ' *' : ''}</button>`).join('') +
+    (M.some(m => m.incomplete) ? `<span class="note">* неповний місяць</span>` : '');
+}
+
+// Перемикач «чий звіт». Обраний місяць зберігаємо, якщо він є і в іншому звіті.
+$('#who').innerHTML = ALL.views.map(v => `<button type="button" data-view="${v.key}">${esc(v.label)}</button>`).join('');
+function setView(key) {
+  const v = ALL.views.find(x => x.key === key) || ALL.views[0];
+  const month = M[sel] && M[sel].key;
+  D = v; M = v.months;
+  const i = M.findIndex(m => m.key === month);
+  sel = i >= 0 ? i : M.length - 1;
+  document.querySelectorAll('#who button').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === v.key));
+  $('#whose').textContent = v.key === 'all' ? 'Оля й Марко разом' : v.label;
+  try { localStorage.setItem('view', v.key); } catch (e) {}
+  monthSwitch(); goal(); render();
+}
+
 document.addEventListener('click', e => {
+  const v = e.target.closest('[data-view]');
+  if (v) { setView(v.dataset.view); return; }
   const t = e.target.closest('[data-i]');
   if (t) select(+t.dataset.i);
 });
@@ -621,8 +670,9 @@ document.addEventListener('focusin', e => {
 document.addEventListener('focusout', () => tip.classList.remove('on'));
 
 let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { goalLine(); rateLine(); stack(); }, 120); });
-goal();
-render();
+let saved = null;
+try { saved = localStorage.getItem('view'); } catch (e) {}
+setView((location.hash || '').slice(1) || saved || ALL.views[0].key);
 """
 
 PAGE = """<!doctype html>
@@ -630,14 +680,15 @@ PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Фінанси Олі</title>
+<title>Фінанси Олі й Марка</title>
 <style>__CSS__</style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Фінанси Олі</h1>
+    <h1>Фінанси: <span id="whose">Оля</span></h1>
     <p>Щомісячний звіт за __PERIOD__ · <span id="period"></span></p>
+    <nav class="who" id="who" aria-label="Чий звіт"></nav>
   </header>
 
   <article class="card" style="margin-top:20px">
@@ -689,27 +740,32 @@ PAGE = """<!doctype html>
 """
 
 
-def render(months, results):
-    info = page_data(months, results)
-    payload = json.dumps(info, ensure_ascii=False).replace("</", "<\\/")
+def render(views):
+    """views — [{key, label, …page_data}] для Олі, Марка і разом; перший — звіт за замовчуванням."""
+    payload = json.dumps({"views": views}, ensure_ascii=False).replace("</", "<\\/")
     return (PAGE.replace("__CSS__", CSS)
                 .replace("__JS__", JS)
                 .replace("__DATA__", payload)
-                .replace("__PERIOD__", info["period"])
+                .replace("__PERIOD__", views[0]["period"])
                 .replace("__GENERATED__", dt.date.today().strftime("%d.%m.%Y")))
 
 
 def main():
-    results = run_saved_queries()
-    months = build_months(results)
-    OUTPUT.write_text(render(months, results), encoding="utf-8")
-    for m, info in months:
-        mark = " (неповний)" if info["incomplete"] else ""
-        print(f"{m:%Y-%m}{mark}: витрати {info['expenses']}, норма {info['rate']} %, "
-              f"фіксовані {info['fixed']}, змінні {info['variable']}")
-    c = cushion(results, months)
-    print(f"Подушка {c['now_at']}: {c['now']:.2f} з {c['target']:.2f}, "
-          f"буде: {c['reach'] or '—'}, треба на місяць: {c['needed']:.2f}")
+    conn, saved = open_ledger()
+    views = []
+    for owner, label in VIEWS:
+        results = run_saved_queries(conn, saved, owner)
+        months = build_months(results)
+        views.append({"key": owner or "all", "label": label, **page_data(months, results)})
+        print(f"— {label}")
+        for m, info in months:
+            mark = " (неповний)" if info["incomplete"] else ""
+            print(f"  {m:%Y-%m}{mark}: витрати {info['expenses']}, норма {info['rate']} %, "
+                  f"фіксовані {info['fixed']}, змінні {info['variable']}")
+        c = cushion(results, months)
+        print(f"  Подушка {c['now_at']}: {c['now']:.2f} з {c['target']:.2f}, "
+              f"буде: {c['reach'] or '—'}, треба на місяць: {c['needed']:.2f}")
+    OUTPUT.write_text(render(views), encoding="utf-8")
     print(f"Записано {OUTPUT.name}.")
 
 
