@@ -27,7 +27,9 @@ import re
 import secrets
 import sys
 import threading
+import struct
 import time
+import zlib
 from http import cookies
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -300,7 +302,7 @@ def report_page(user):
     html = report.OUTPUT.read_text(encoding="utf-8")
     # Звіт за замовчуванням — того, хто увійшов (перемикач Оля / Марко / Разом лишається).
     default = f"<script>window.DEFAULT_VIEW={json.dumps(user)}</script>"
-    return (html.replace("</style>", NAV_CSS + "</style>", 1)
+    return with_pwa(html.replace("</style>", NAV_CSS + "</style>", 1)
                 .replace('<div class="wrap">', '<div class="wrap">' + nav(user, "/"), 1)
                 .replace('<script type="application/json" id="data">', default + '<script type="application/json" id="data">', 1))
 
@@ -337,11 +339,73 @@ LOGIN = """<!doctype html>
 
 def login_page(error=""):
     err = f'<p class="err" role="alert">{error}</p>' if error else ""
-    return LOGIN.replace("__CSS__", report.CSS).replace("__ERROR__", err)
+    return with_pwa(LOGIN.replace("__CSS__", report.CSS).replace("__ERROR__", err))
 
 
 def manage_page(user):
-    return MANAGE.replace("__CSS__", report.CSS + NAV_CSS + MANAGE_CSS).replace("__NAV__", nav(user, "/manage"))
+    return with_pwa(MANAGE.replace("__CSS__", report.CSS + NAV_CSS + MANAGE_CSS).replace("__NAV__", nav(user, "/manage")))
+
+
+# ---------- PWA: іконка на головному екрані ----------
+# Manifest, іконки й service worker публічні й не містять жодних даних.
+
+THEME = "#2a78d6"
+
+
+def icon_png(size):
+    """PNG-іконка без бібліотек: синій квадрат із трьома білими стовпчиками (графік витрат)."""
+    bg, fg = (0x2A, 0x78, 0xD6), (0xFF, 0xFF, 0xFF)
+    bars = [(0.24, 0.55), (0.43, 0.35), (0.62, 0.45)]  # (лівий край, верх) у частках розміру
+    width, bottom = 0.14, 0.76
+    rows = []
+    for y in range(size):
+        row = bytearray([0])
+        for x in range(size):
+            fx, fy = x / size, y / size
+            inside = any(left <= fx < left + width and top <= fy < bottom for left, top in bars)
+            row += bytes(fg if inside else bg)
+        rows.append(bytes(row))
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+
+
+ICONS = {f"/icon-{n}.png": icon_png(n) for n in (192, 512)}
+
+MANIFEST = json.dumps({
+    "name": "Фінанси Олі й Марка",
+    "short_name": "Фінанси",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#f9f9f7",
+    "theme_color": THEME,
+    "lang": "uk",
+    "icons": [{"src": path, "sizes": f"{n}x{n}", "type": "image/png", "purpose": "any maskable"}
+              for path, n in (("/icon-192.png", 192), ("/icon-512.png", 512))],
+}, ensure_ascii=False)
+
+# Без кешування: фінансові дані не лишаються в памʼяті телефона, усе йде в мережу.
+SERVICE_WORKER = """self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', () => {});
+"""
+
+PWA_HEAD = (f'<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="{THEME}">'
+            '<link rel="apple-touch-icon" href="/icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes">'
+            "<script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>")
+
+
+def with_pwa(html):
+    return html.replace("</head>", PWA_HEAD + "</head>", 1)
+
+
+PUBLIC = {
+    "/manifest.webmanifest": (MANIFEST, "application/manifest+json"),
+    "/sw.js": (SERVICE_WORKER, "text/javascript"),
+}
 
 
 # ---------- WSGI ----------
@@ -349,7 +413,8 @@ def manage_page(user):
 def respond(start_response, status, body=b"", ctype="text/html", headers=(), https=False):
     if isinstance(body, str):
         body = body.encode("utf-8")
-    base = [("Content-Type", f"{ctype}; charset=utf-8"), ("Content-Length", str(len(body))),
+    charset = "" if ctype.startswith("image/") else "; charset=utf-8"
+    base = [("Content-Type", f"{ctype}{charset}"), ("Content-Length", str(len(body))),
             ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
             ("X-Frame-Options", "DENY"), ("Referrer-Policy", "same-origin")]
     if https:
@@ -379,6 +444,13 @@ def application(environ, start_response):
     if not https and not is_local(environ):
         location = f"https://{environ.get('HTTP_HOST', '')}{path}"
         return respond(start_response, "301 Moved Permanently", "", headers=[("Location", location)])
+
+    # Публічні файли PWA: без даних, тож доступні й без входу.
+    if path in PUBLIC:
+        body, ctype = PUBLIC[path]
+        return respond(start_response, "200 OK", body, ctype, https=https)
+    if path in ICONS:
+        return respond(start_response, "200 OK", ICONS[path], "image/png", https=https)
 
     if path == "/login":
         if method == "POST":
