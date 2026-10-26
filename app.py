@@ -296,13 +296,21 @@ def nav(user, current):
     return f'<nav class="appnav">{html}<a class="out" href="/logout">Вийти ({NAMES[user]})</a></nav>'
 
 
+FAB = ('<a class="fab" href="/manage" aria-label="Додати витрату">+ Витрата</a>')
+FAB_CSS = (".fab{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:30;"
+           "background:var(--accent);color:var(--on-accent);text-decoration:none;font-weight:600;font-size:17px;"
+           "padding:14px 20px;border-radius:999px;box-shadow:0 4px 16px rgba(0,0,0,.25)}"
+           ".wrap{padding-bottom:88px}")
+
+
 def report_page(user):
     if not report.OUTPUT.exists():
         rebuild()
     html = report.OUTPUT.read_text(encoding="utf-8")
     # Звіт за замовчуванням — того, хто увійшов (перемикач Оля / Марко / Разом лишається).
     default = f"<script>window.DEFAULT_VIEW={json.dumps(user)}</script>"
-    return with_pwa(html.replace("</style>", NAV_CSS + "</style>", 1)
+    return with_pwa(html.replace("</style>", NAV_CSS + FAB_CSS + "</style>", 1)
+                .replace('<div id="tip"', FAB + '<div id="tip"', 1)
                 .replace('<div class="wrap">', '<div class="wrap">' + nav(user, "/"), 1)
                 .replace('<script type="application/json" id="data">', default + '<script type="application/json" id="data">', 1))
 
@@ -539,6 +547,12 @@ box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;pointer-events:none;transition:o
 #msg.on{opacity:1;pointer-events:auto}
 #msg.err{background:var(--bad);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
+button.big{font-size:17px;padding:12px 28px;min-height:48px}
+details.more summary{cursor:pointer;list-style:none}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary h2::before{content:"▸ ";color:var(--muted)}
+details.more[open] summary h2::before{content:"▾ "}
+details.more summary .hint{display:block;margin-bottom:4px}
 table.list{width:100%;border-collapse:collapse;font-size:14px}
 .list th{text-align:left;font-weight:500;color:var(--ink-2);padding:6px 8px;border-bottom:1px solid var(--grid)}
 .list td{padding:8px;border-bottom:1px solid var(--grid);vertical-align:top}
@@ -557,32 +571,31 @@ MANAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ручні операції</title>
+<title>Додати витрату · Фінанси</title>
 <style>__CSS__</style>
 </head>
 <body>
 <div class="wrap">
 __NAV__
-<header><h1>Ручні операції і рахунки</h1>
-<p>Те, чого немає у банківській виписці: готівка, інша картка, інші джерела доходу. Після збереження звіт перераховується сам.</p></header>
+<header><h1>Додати витрату</h1>
+<p>Готівка та все, чого немає у виписці з банку. Звіт оновлюється одразу після збереження.</p></header>
 <p id="msg" role="status" aria-live="polite"></p>
 
 <article class="card" style="margin-top:8px">
-  <h2 id="op-title">Додати операцію</h2>
-  <p class="sub" id="op-sub">Готівка й інші рахунки поза випискою. Операції з банківських рахунків беруться з виписок.</p>
+  <h2 id="op-title">Нова операція</h2>
   <form class="grid" id="op-form">
     <div class="full seg2" role="radiogroup" aria-label="Тип операції">
       <label><input type="radio" name="тип" value="витрата" checked> Витрата</label>
       <label><input type="radio" name="тип" value="дохід"> Дохід</label>
     </div>
-    <label>Дата<input type="date" name="дата" required></label>
-    <label>Сума, зл<input name="сума" inputmode="decimal" placeholder="45,00" required></label>
-    <label class="full">Опис<input name="опис" placeholder="Наприклад: ринок, фріланс-проєкт" required maxlength="120"></label>
+    <label>Сума, зл<input name="сума" inputmode="decimal" placeholder="20,00" required autocomplete="off"></label>
+    <label>Що купили<input name="опис" placeholder="Кава, ринок…" required maxlength="120" autocomplete="off"></label>
     <label><span id="cat-label">Категорія</span><select name="категорія" required></select></label>
     <label><span id="acc-label">З якого рахунку</span><select name="рахунок" required></select></label>
+    <label>Дата<input type="date" name="дата" required></label>
     <label class="check full" id="fixed-box"><input type="checkbox" name="фіксована"> Фіксована витрата (щомісяця однакова)</label>
     <div class="full btns">
-      <button class="primary" type="submit" id="op-save">Додати</button>
+      <button class="primary big" type="submit" id="op-save">Зберегти</button>
       <button type="button" id="op-cancel" hidden>Скасувати</button>
     </div>
     <p class="hint full" id="op-hint"></p>
@@ -590,12 +603,12 @@ __NAV__
 </article>
 
 <article class="card">
-  <h2>Ручні операції</h2>
+  <h2>Додані вручну</h2>
   <div class="scroll" id="ops"></div>
 </article>
 
-<article class="card">
-  <h2 id="acc-title">Рахунки і джерела доходу</h2>
+<details class="card more">
+  <summary><h2 id="acc-title">Рахунки і джерела доходу</h2><span class="hint">рідко потрібно: нова картка, нове джерело доходу</span></summary>
   <p class="sub">Рахунок — де лежать гроші (готівка, інша картка); вони рахуються в подушку безпеки. Джерело доходу — звідки гроші приходять.</p>
   <div class="scroll" id="accs"></div>
   <h3 id="acc-form-title">Додати</h3>
@@ -613,7 +626,7 @@ __NAV__
       <button type="button" id="acc-cancel" hidden>Скасувати</button>
     </div>
   </form>
-</article>
+</details>
 </div>
 
 <script>
@@ -650,6 +663,8 @@ function options(sel, list, current) {
 function syncOpForm(keep) {
   const k = opKind();
   options(opForm.elements['категорія'], k === 'витрата' ? S.expense : S.income, keep && keep['категорія']);
+  // Без вибору за замовчуванням: інакше кава легко зберігається як «Житло».
+  if (!(keep && keep['категорія'])) opForm.elements['категорія'].insertAdjacentHTML('afterbegin', '<option value="" selected disabled>Оберіть категорію…</option>');
   options(opForm.elements['рахунок'], S.assets, (keep && keep['рахунок']) || S.my_cash);
   $('#cat-label').textContent = k === 'витрата' ? 'Категорія' : 'Джерело доходу';
   $('#acc-label').textContent = k === 'витрата' ? 'З якого рахунку' : 'На який рахунок';
@@ -691,7 +706,7 @@ function syncAccForm() {
 
 function resetOp() {
   editOp = null; opForm.reset(); opForm.elements['дата'].value = S.today;
-  $('#op-title').textContent = 'Додати операцію'; $('#op-save').textContent = 'Додати'; $('#op-cancel').hidden = true;
+  $('#op-title').textContent = 'Нова операція'; $('#op-save').textContent = 'Зберегти'; $('#op-cancel').hidden = true;
   syncOpForm(); renderOps();
 }
 function resetAcc() {
