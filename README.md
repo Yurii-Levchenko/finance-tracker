@@ -57,6 +57,6 @@ TRACKER_SECRET=<випадковий рядок>
 1. Bash-консоль PythonAnywhere: `git clone https://github.com/Yurii-Levchenko/finance-tracker.git`.
 2. Віртуальне середовище: `mkvirtualenv --python=python3.12 tracker`, потім `pip install "beancount>=3.2,<4" beanquery`.
 3. Перевірка: `cd finance-tracker && python check.py` — має закінчитися «Усе збігається ✓».
-4. Секрети: `python app.py hash` для кожного користувача, потім створити `~/.tracker.env` з `TRACKER_USERS` і `TRACKER_SECRET` і виконати `chmod 600 ~/.tracker.env`.
+4. Секрети: `python app.py setup` генерує паролі для olya і marko та ключ сесій, записує `~/.tracker.env` з правами лише для власника і один раз показує паролі. Або вручну: `python app.py hash` для кожного користувача.
 5. Вкладка Web → Add a new web app → Manual configuration → Python 3.12. Virtualenv: `/home/<логін>/.virtualenvs/tracker`. У WSGI-файл скопіювати вміст `pythonanywhere_wsgi.py` (замінивши `USERNAME`).
 6. Увімкнути **Force HTTPS**, натиснути **Reload**. Трекер відкривається на `https://<логін>.pythonanywhere.com`.

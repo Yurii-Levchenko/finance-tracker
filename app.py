@@ -4,6 +4,7 @@ WSGI-застосунок на стандартному Python (без Flask), �
 
   Локально:  uv run python app.py            → http://127.0.0.1:5055
   Хеш пароля: uv run python app.py hash       → рядок для TRACKER_USERS
+  Налаштування: python app.py setup          → генерує паролі й ключ у ~/.tracker.env
   Сервер:    WSGI-файл імпортує `application` з цього модуля (див. README).
 
 Паролі й ключі — лише в змінних середовища (або у файлі ~/.tracker.env поза репозиторієм):
@@ -685,7 +686,25 @@ fetch('/api/state').then(r => r.json()).then(j => { S = j; resetOp(); resetAcc()
 """
 
 
+def setup():
+    """Генерує паролі для olya і marko та ключ сесій, пише ~/.tracker.env (лише для власника)."""
+    path = Path(os.environ.get("TRACKER_ENV_FILE", Path.home() / ".tracker.env"))
+    if path.exists() and sys.argv[2:] != ["--force"]:
+        raise SystemExit(f"{path} уже існує. Щоб перегенерувати паролі: python app.py setup --force")
+    passwords = {user: secrets.token_urlsafe(9) for user in NAMES}
+    lines = ["TRACKER_USERS=" + ",".join(f"{u}={hash_password(p)}" for u, p in passwords.items()),
+             f"TRACKER_SECRET={secrets.token_hex(32)}"]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    print(f"Записано {path} (доступ лише власнику). Паролі показуються один раз — перепишіть їх:")
+    for user, password in passwords.items():
+        print(f"  {user}: {password}")
+
+
 def main():
+    if sys.argv[1:2] == ["setup"]:
+        setup()
+        return
     if sys.argv[1:] == ["hash"]:
         password = getpass.getpass("Пароль: ")
         if password != getpass.getpass("Ще раз: "):
