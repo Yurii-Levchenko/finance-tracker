@@ -8,7 +8,7 @@
 import os
 import sys
 
-PROJECT = "/home/USERNAME/my-finance"
+PROJECT = "/home/USERNAME/finance-tracker"
 sys.path.insert(0, PROJECT)
 os.chdir(PROJECT)
 

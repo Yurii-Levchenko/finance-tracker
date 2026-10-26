@@ -1,4 +1,4 @@
-# my-finance — трекер витрат для двох (Оля й Марко)
+# finance-tracker — трекер витрат для двох (Оля й Марко)
 
 Особистий фінансовий трекер на Beancount 3. Зібраний на занятті 7 Warsaw IT School 5.0 і розширений у ДЗ #3: тепер він веде облік двох людей з різних банків.
 
@@ -54,9 +54,9 @@ TRACKER_SECRET=<випадковий рядок>
 
 ## Розгортання на PythonAnywhere (безкоштовний акаунт)
 
-1. Bash-консоль PythonAnywhere: `git clone https://github.com/<ваш-логін>/my-finance.git`.
+1. Bash-консоль PythonAnywhere: `git clone https://github.com/Yurii-Levchenko/finance-tracker.git`.
 2. Віртуальне середовище: `mkvirtualenv --python=python3.12 tracker`, потім `pip install "beancount>=3.2,<4" beanquery`.
-3. Перевірка: `cd my-finance && python check.py` — має закінчитися «Усе збігається ✓».
+3. Перевірка: `cd finance-tracker && python check.py` — має закінчитися «Усе збігається ✓».
 4. Секрети: `python app.py hash` для кожного користувача, потім створити `~/.tracker.env` з `TRACKER_USERS` і `TRACKER_SECRET` і виконати `chmod 600 ~/.tracker.env`.
 5. Вкладка Web → Add a new web app → Manual configuration → Python 3.12. Virtualenv: `/home/<логін>/.virtualenvs/tracker`. У WSGI-файл скопіювати вміст `pythonanywhere_wsgi.py` (замінивши `USERNAME`).
 6. Увімкнути **Force HTTPS**, натиснути **Reload**. Трекер відкривається на `https://<логін>.pythonanywhere.com`.
