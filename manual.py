@@ -17,8 +17,10 @@ ROOT = Path(__file__).parent
 ACCOUNTS_FILE = ROOT / "accounts.csv"
 MANUAL_FILE = ROOT / "manual.csv"
 
-ACCOUNT_FIELDS = ["рахунок", "тип", "назва", "відкрито", "стартовий залишок"]
-MANUAL_FIELDS = ["id", "дата", "тип", "опис", "сума", "категорія", "рахунок", "фіксована"]
+# «власник» / «хто» — тег власника (olya / marko): хто додав рахунок чи операцію.
+ACCOUNT_FIELDS = ["рахунок", "тип", "назва", "відкрито", "стартовий залишок", "власник"]
+MANUAL_FIELDS = ["id", "дата", "тип", "опис", "сума", "категорія", "рахунок", "фіксована", "хто"]
+OWNERS = ("olya", "marko")
 
 BANK_ACCOUNTS = ("Assets:Банк:Поточний", "Assets:Банк:Марко")
 OPENING_ACCOUNT = "Equity:Початковий-Залишок"
@@ -130,6 +132,8 @@ def validate(accounts, operations, known):
                     return f"{readable(account)} відкрито {opened[account]}, а операція датована {date}."
             if not op["опис"]:
                 return "Опис операції порожній."
+            if op.get("хто") and op["хто"] not in OWNERS:
+                return f"Невідомий власник «{op['хто']}»."
     except ValueError as e:
         return str(e)
     return None
@@ -141,8 +145,12 @@ def quote(text):
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def owner_tag(owner):
+    return f" #{owner}" if owner in OWNERS else ""
+
+
 def beancount_text(accounts, operations):
-    """Відкриття ручних рахунків, їхні стартові залишки й ручні операції (тег #manual)."""
+    """Відкриття ручних рахунків, їхні стартові залишки й ручні операції (тег #manual і тег власника)."""
     if not accounts and not operations:
         return ""
     parts = ["; Ручні дані з accounts.csv і manual.csv (сторінка app.py).\n\n"]
@@ -151,7 +159,7 @@ def beancount_text(accounts, operations):
         start = parse_amount(a["стартовий залишок"] or "0", allow_zero=True) if a["тип"] == "рахунок" else 0
         if start:
             parts.append(
-                f"{a['відкрито']} * {quote('Стартовий залишок: ' + a['назва'])} #manual\n"
+                f"{a['відкрито']} * {quote('Стартовий залишок: ' + a['назва'])} #manual{owner_tag(a.get('власник'))}\n"
                 f"  {a['рахунок']}  {start:.2f} {CURRENCY}\n"
                 f"  {OPENING_ACCOUNT}\n"
             )
@@ -159,7 +167,7 @@ def beancount_text(accounts, operations):
     for op in operations:
         amount = parse_amount(op["сума"])
         sign = -1 if op["тип"] == "витрата" else 1
-        tags = " #manual" + (" #fixed" if op["фіксована"] == "так" else "")
+        tags = " #manual" + owner_tag(op.get("хто")) + (" #fixed" if op["фіксована"] == "так" else "")
         parts.append(
             f"{op['дата']} * {quote(op['опис'])}{tags}\n"
             f"  {op['рахунок']}  {sign * amount:.2f} {CURRENCY}\n"

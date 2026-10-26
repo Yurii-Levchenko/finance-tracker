@@ -1,20 +1,36 @@
-"""Локальна сторінка Олі: звіт плюс форми для ручних операцій, рахунків і джерел доходу.
+"""Трекер Олі й Марка: звіт плюс форми для ручних операцій, з входом за паролем.
 
-Запуск: uv run python app.py → http://127.0.0.1:5055
+WSGI-застосунок на стандартному Python (без Flask), тож працює і локально, і на PythonAnywhere.
 
-Форми правлять accounts.csv і manual.csv. Після кожного збереження сторінка заново
-запускає import.py, перевіряє облік (як bean-check) і перегенеровує report.html.
-Якщо облік після зміни має помилку, зміна скасовується і сторінка показує чому.
-Працює лише на цьому компʼютері (127.0.0.1) і лише на стандартному Python.
+  Локально:  uv run python app.py            → http://127.0.0.1:5055
+  Хеш пароля: uv run python app.py hash       → рядок для TRACKER_USERS
+  Сервер:    WSGI-файл імпортує `application` з цього модуля (див. README).
+
+Паролі й ключі — лише в змінних середовища (або у файлі ~/.tracker.env поза репозиторієм):
+  TRACKER_USERS  = olya=<хеш>,marko=<хеш>   (хеш дає `app.py hash`, самого пароля ніде немає)
+  TRACKER_SECRET = випадковий рядок для підпису сесійних cookie
+
+Без входу сторінка не показує жодних даних. Форми правлять accounts.csv і manual.csv; після
+кожного збереження запускаються import.py, перевірка обліку (як bean-check) і report.py,
+а якщо облік зламався, зміна скасовується.
 """
 
 import datetime as dt
+import getpass
+import hashlib
+import hmac
 import importlib.util
 import json
+import os
 import re
+import secrets
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time
+from http import cookies
+from pathlib import Path
+from urllib.parse import parse_qs
+from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 from beancount import loader
 
@@ -53,18 +69,26 @@ def rebuild():
     return None
 
 
-def state():
+# Тег власника → як його показувати і його рахунок готівки в main.beancount.
+NAMES = {"olya": "Оля", "marko": "Марко"}
+CASH = {"olya": "Assets:Готівка:Оля", "marko": "Assets:Готівка:Марко"}
+
+
+def state(user=None):
     known = main_accounts()
     accounts = manual.read_accounts()
     mine = [a["рахунок"] for a in accounts]
+    cash = [a for a in known if a.startswith("Assets:") and a not in manual.BANK_ACCOUNTS]
     return {
+        "me": user,
+        "my_cash": CASH.get(user),
         "accounts": accounts,
         "operations": manual.read_operations(),
         "builtin": [{"рахунок": a, "відкрито": str(d)} for a, d in known.items()
                     if a.split(":")[0] in ("Assets", "Income")],
         "expense": [a for a in known if a.startswith("Expenses:") and a != "Expenses:Без-Категорії"],
         "income": [a for a in known if a.startswith("Income:")] + [a for a in mine if a.startswith("Income:")],
-        "assets": [a for a in mine if a.startswith("Assets:")],
+        "assets": cash + [a for a in mine if a.startswith("Assets:")],
         "today": str(dt.date.today()),
     }
 
@@ -88,9 +112,10 @@ def apply(accounts, operations):
 
 # ---------- Дії форм ----------
 
-def save_operation(body):
+def save_operation(body, user):
     ops = manual.read_operations()
     op = {k: str(body.get(k, "")).strip() for k in manual.MANUAL_FIELDS}
+    op["хто"] = user
     op["фіксована"] = "так" if op["тип"] == "витрата" and body.get("фіксована") in (True, "так") else "ні"
     if op["сума"]:
         try:
@@ -98,8 +123,10 @@ def save_operation(body):
         except ValueError as e:
             return str(e)
     if op["id"]:
-        if not any(o["id"] == op["id"] for o in ops):
+        old = next((o for o in ops if o["id"] == op["id"]), None)
+        if old is None:
             return "Операцію не знайдено — оновіть сторінку."
+        op["хто"] = old.get("хто") or user  # редагування не змінює, чия це операція
         ops = [op if o["id"] == op["id"] else o for o in ops]
     else:
         op["id"] = str(max((int(o["id"]) for o in ops), default=0) + 1)
@@ -107,12 +134,12 @@ def save_operation(body):
     return apply(manual.read_accounts(), ops)
 
 
-def delete_operation(body):
+def delete_operation(body, user):
     ops = manual.read_operations()
     return apply(manual.read_accounts(), [o for o in ops if o["id"] != str(body.get("id"))])
 
 
-def save_account(body):
+def save_account(body, user):
     accounts, ops = manual.read_accounts(), manual.read_operations()
     kind = str(body.get("тип", "")).strip()
     title = str(body.get("назва", "")).strip()
@@ -129,7 +156,7 @@ def save_account(body):
         except ValueError as e:
             return str(e)
     row = {"рахунок": name, "тип": kind, "назва": title,
-           "відкрито": str(body.get("відкрито", "")).strip(), "стартовий залишок": start}
+           "відкрито": str(body.get("відкрито", "")).strip(), "стартовий залишок": start, "власник": user}
     old = str(body.get("old", "")).strip()
     if old:
         if not any(a["рахунок"] == old for a in accounts):
@@ -137,6 +164,7 @@ def save_account(body):
         if name != old and any(o["рахунок"] == old or o["категорія"] == old for o in ops) \
                 and name.split(":")[0] != old.split(":")[0]:
             return "Тип рахунку з операціями змінити не можна."
+        row["власник"] = next(a for a in accounts if a["рахунок"] == old).get("власник") or user
         accounts = [row if a["рахунок"] == old else a for a in accounts]
         # Перейменування — оновлюємо посилання в ручних операціях.
         for o in ops:
@@ -148,7 +176,7 @@ def save_account(body):
     return apply(accounts, ops)
 
 
-def delete_account(body):
+def delete_account(body, user):
     name = str(body.get("рахунок", ""))
     ops = manual.read_operations()
     used = sum(1 for o in ops if name in (o["рахунок"], o["категорія"]))
@@ -165,65 +193,249 @@ ACTIONS = {
 }
 
 
-# ---------- Сервер ----------
+# ---------- Вхід: паролі й сесії ----------
 
-NAV = ('<nav class="appnav"><a href="/">Звіт</a><a href="/manage">Ручні операції і рахунки</a></nav>')
-NAV_CSS = (".appnav{display:flex;gap:6px;margin:0 0 16px;font-size:15px}"
+def load_env_file():
+    """Підтягує змінні з ~/.tracker.env (або TRACKER_ENV_FILE), не перезаписуючи вже задані."""
+    path = Path(os.environ.get("TRACKER_ENV_FILE", Path.home() / ".tracker.env"))
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+
+
+load_env_file()
+
+COOKIE = "tracker_session"
+SESSION_SECONDS = 30 * 24 * 3600
+MAX_FAILS, FAIL_WINDOW = 5, 15 * 60          # 5 невдалих спроб за 15 хвилин з однієї адреси
+FAILS = {}                                    # IP → час невдалих спроб
+SECRET = os.environ.get("TRACKER_SECRET", "").encode()
+if not SECRET:
+    # Без секрету сесії живуть до перезапуску — для локальної перевірки досить, на сервері задайте TRACKER_SECRET.
+    SECRET = secrets.token_bytes(32)
+    print("Увага: TRACKER_SECRET не задано, сесії скинуться після перезапуску.", file=sys.stderr)
+
+
+def hash_password(password, salt=None, iterations=200_000):
+    """Пароль → «pbkdf2$ітерації$сіль$хеш». Сам пароль ніде не зберігається."""
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), iterations).hex()
+    return f"pbkdf2${iterations}${salt}${digest}"
+
+
+def check_password(password, stored):
+    try:
+        _, iterations, salt, _ = stored.split("$")
+        return hmac.compare_digest(hash_password(password, salt, int(iterations)), stored)
+    except ValueError:
+        return False
+
+
+def users():
+    """TRACKER_USERS = «olya=<хеш>,marko=<хеш>» → {логін: хеш}."""
+    pairs = (item.split("=", 1) for item in os.environ.get("TRACKER_USERS", "").split(",") if "=" in item)
+    return {login.strip(): stored.strip() for login, stored in pairs if login.strip() in NAMES}
+
+
+def sign(user, expires):
+    message = f"{user}|{expires}"
+    return f"{message}|{hmac.new(SECRET, message.encode(), hashlib.sha256).hexdigest()}"
+
+
+def session_user(environ):
+    """Хто увійшов: перевіряє підпис і строк дії cookie. None — не увійшов."""
+    jar = cookies.SimpleCookie(environ.get("HTTP_COOKIE", ""))
+    if COOKIE not in jar:
+        return None
+    try:
+        user, expires, _ = jar[COOKIE].value.split("|")
+    except ValueError:
+        return None
+    if not hmac.compare_digest(sign(user, expires), jar[COOKIE].value) or int(expires) < time.time():
+        return None
+    return user if user in users() else None
+
+
+def client_ip(environ):
+    return environ.get("HTTP_X_REAL_IP") or environ.get("REMOTE_ADDR", "?")
+
+
+def too_many_fails(ip):
+    now = time.time()
+    FAILS[ip] = [t for t in FAILS.get(ip, []) if now - t < FAIL_WINDOW]
+    return len(FAILS[ip]) >= MAX_FAILS
+
+
+def is_https(environ):
+    return (environ.get("HTTP_X_FORWARDED_PROTO") or environ.get("wsgi.url_scheme")) == "https"
+
+
+def is_local(environ):
+    host = environ.get("HTTP_HOST", "").split(":")[0]
+    return host in ("127.0.0.1", "localhost")
+
+
+# ---------- Сторінки ----------
+
+NAV_CSS = (".appnav{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 16px;font-size:15px}"
            ".appnav a{color:var(--ink);text-decoration:none;border:1px solid var(--border);"
            "background:var(--surface);padding:6px 12px;border-radius:999px}"
-           ".appnav a[aria-current]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}")
+           ".appnav a[aria-current]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}"
+           ".appnav .out{margin-left:auto;color:var(--ink-2)}")
 
 
-def report_page():
+def nav(user, current):
+    links = [("/", "Звіт"), ("/manage", "Додати витрату")]
+    html = "".join(f'<a href="{href}"{" aria-current=page" if href == current else ""}>{text}</a>'
+                   for href, text in links)
+    return f'<nav class="appnav">{html}<a class="out" href="/logout">Вийти ({NAMES[user]})</a></nav>'
+
+
+def report_page(user):
+    if not report.OUTPUT.exists():
+        rebuild()
     html = report.OUTPUT.read_text(encoding="utf-8")
-    nav = NAV.replace('href="/"', 'href="/" aria-current="page"')
+    # Звіт за замовчуванням — того, хто увійшов (перемикач Оля / Марко / Разом лишається).
+    default = f"<script>window.DEFAULT_VIEW={json.dumps(user)}</script>"
     return (html.replace("</style>", NAV_CSS + "</style>", 1)
-                .replace('<div class="wrap">', '<div class="wrap">' + nav, 1))
+                .replace('<div class="wrap">', '<div class="wrap">' + nav(user, "/"), 1)
+                .replace('<script type="application/json" id="data">', default + '<script type="application/json" id="data">', 1))
 
 
-class Handler(BaseHTTPRequestHandler):
-    def send(self, code, body, ctype):
-        data = body.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", ctype + "; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(data)
+LOGIN = """<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вхід · Фінанси Олі й Марка</title>
+<style>__CSS__
+.login{max-width:360px;margin:12vh auto 0;padding:0 16px}
+.login form{display:grid;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px}
+.login label{display:grid;gap:4px;font-size:14px;color:var(--ink-2)}
+.login input{font:inherit;font-size:16px;color:var(--ink);background:var(--page);border:1px solid var(--axis);border-radius:8px;padding:10px}
+.login button{font:inherit;font-size:16px;border:0;border-radius:999px;padding:10px;background:var(--accent);color:var(--on-accent);cursor:pointer}
+.login .err{color:var(--bad);margin:0}
+</style>
+</head>
+<body>
+<main class="login">
+  <h1>Фінанси Олі й Марка</h1>
+  <form method="post" action="/login">
+    __ERROR__
+    <label>Логін<input name="login" autocomplete="username" autocapitalize="none" required></label>
+    <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Увійти</button>
+  </form>
+</main>
+</body>
+</html>
+"""
 
-    def send_json(self, obj, code=200):
-        self.send(code, json.dumps(obj, ensure_ascii=False), "application/json")
 
-    def do_GET(self):
-        path = self.path.split("?")[0]
-        if path == "/":
-            self.send(200, report_page(), "text/html")
-        elif path == "/manage":
-            nav = NAV.replace('href="/manage"', 'href="/manage" aria-current="page"')
-            page = (MANAGE.replace("__CSS__", report.CSS + NAV_CSS + MANAGE_CSS)
-                          .replace("__NAV__", nav))
-            self.send(200, page, "text/html")
-        elif path == "/api/state":
-            with LOCK:
-                self.send_json(state())
-        else:
-            self.send(404, "Не знайдено", "text/plain")
+def login_page(error=""):
+    err = f'<p class="err" role="alert">{error}</p>' if error else ""
+    return LOGIN.replace("__CSS__", report.CSS).replace("__ERROR__", err)
 
-    def do_POST(self):
-        action = ACTIONS.get(self.path)
-        # Лише JSON-запити зі своєї ж сторінки: чужий сайт не зможе нічого записати.
-        if not action or not self.headers.get("Content-Type", "").startswith("application/json"):
-            return self.send_json({"error": "Невідомий запит."}, 400)
-        try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        except json.JSONDecodeError:
-            return self.send_json({"error": "Некоректні дані."}, 400)
+
+def manage_page(user):
+    return MANAGE.replace("__CSS__", report.CSS + NAV_CSS + MANAGE_CSS).replace("__NAV__", nav(user, "/manage"))
+
+
+# ---------- WSGI ----------
+
+def respond(start_response, status, body=b"", ctype="text/html", headers=(), https=False):
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    base = [("Content-Type", f"{ctype}; charset=utf-8"), ("Content-Length", str(len(body))),
+            ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
+            ("X-Frame-Options", "DENY"), ("Referrer-Policy", "same-origin")]
+    if https:
+        base.append(("Strict-Transport-Security", "max-age=31536000"))
+    start_response(status, base + list(headers))
+    return [body]
+
+
+def cookie_header(value, max_age, https):
+    flags = f"Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax" + ("; Secure" if https else "")
+    return ("Set-Cookie", f"{COOKIE}={value}; {flags}")
+
+
+def read_body(environ):
+    try:
+        size = int(environ.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        size = 0
+    return environ["wsgi.input"].read(min(size, 100_000)) if size > 0 else b""
+
+
+def application(environ, start_response):
+    path, method = environ.get("PATH_INFO", "/"), environ.get("REQUEST_METHOD", "GET")
+    https = is_https(environ)
+
+    # Лише HTTPS: звичайний HTTP (крім локального запуску) перенаправляємо.
+    if not https and not is_local(environ):
+        location = f"https://{environ.get('HTTP_HOST', '')}{path}"
+        return respond(start_response, "301 Moved Permanently", "", headers=[("Location", location)])
+
+    if path == "/login":
+        if method == "POST":
+            ip = client_ip(environ)
+            if too_many_fails(ip):
+                return respond(start_response, "429 Too Many Requests",
+                               login_page("Забагато невдалих спроб. Спробуйте через 15 хвилин."), https=https)
+            form = parse_qs(read_body(environ).decode("utf-8", "replace"))
+            login = form.get("login", [""])[0].strip().lower()
+            password = form.get("password", [""])[0]
+            stored = users().get(login)
+            if stored and check_password(password, stored):
+                FAILS.pop(ip, None)
+                value = sign(login, int(time.time()) + SESSION_SECONDS)
+                return respond(start_response, "303 See Other", "", https=https,
+                               headers=[("Location", "/"), cookie_header(value, SESSION_SECONDS, https)])
+            FAILS.setdefault(ip, []).append(time.time())
+            return respond(start_response, "401 Unauthorized", login_page("Невірний логін або пароль."), https=https)
+        return respond(start_response, "200 OK", login_page(), https=https)
+
+    if path == "/logout":
+        return respond(start_response, "303 See Other", "", https=https,
+                       headers=[("Location", "/login"), cookie_header("", 0, https)])
+
+    # Далі — лише для тих, хто увійшов. Без входу жодних даних.
+    user = session_user(environ)
+    if not user:
+        if path.startswith("/api/"):
+            return respond(start_response, "401 Unauthorized", json.dumps({"error": "Потрібен вхід."}),
+                           "application/json", https=https)
+        return respond(start_response, "303 See Other", "", headers=[("Location", "/login")], https=https)
+
+    if method == "GET" and path == "/":
+        return respond(start_response, "200 OK", report_page(user), https=https)
+    if method == "GET" and path == "/manage":
+        return respond(start_response, "200 OK", manage_page(user), https=https)
+    if method == "GET" and path == "/api/state":
         with LOCK:
-            error = action(body)
-            self.send_json({"error": error, "state": state()}, 400 if error else 200)
-
-    def log_message(self, fmt, *args):
-        pass
+            return respond(start_response, "200 OK", json.dumps(state(user), ensure_ascii=False),
+                           "application/json", https=https)
+    action = ACTIONS.get(path)
+    if method == "POST" and action:
+        # Лише JSON зі своєї ж сторінки: чужий сайт не зможе нічого записати від імені користувача.
+        origin = environ.get("HTTP_ORIGIN")
+        same_origin = not origin or origin.split("://", 1)[-1] == environ.get("HTTP_HOST")
+        if not environ.get("CONTENT_TYPE", "").startswith("application/json") or not same_origin:
+            return respond(start_response, "400 Bad Request", json.dumps({"error": "Невідомий запит."}),
+                           "application/json", https=https)
+        try:
+            body = json.loads(read_body(environ) or b"{}")
+        except json.JSONDecodeError:
+            return respond(start_response, "400 Bad Request", json.dumps({"error": "Некоректні дані."}),
+                           "application/json", https=https)
+        with LOCK:
+            error = action(body, user)
+            payload = json.dumps({"error": error, "state": state(user)}, ensure_ascii=False)
+        return respond(start_response, "400 Bad Request" if error else "200 OK", payload, "application/json", https=https)
+    return respond(start_response, "404 Not Found", "Не знайдено", "text/plain", https=https)
 
 
 # ---------- Сторінка «Ручні операції і рахунки» ----------
@@ -284,7 +496,7 @@ __NAV__
 
 <article class="card" style="margin-top:8px">
   <h2 id="op-title">Додати операцію</h2>
-  <p class="sub" id="op-sub">Операції банківського рахунку беруться з виписки — тут лише інші рахунки.</p>
+  <p class="sub" id="op-sub">Готівка й інші рахунки поза випискою. Операції з банківських рахунків беруться з виписок.</p>
   <form class="grid" id="op-form">
     <div class="full seg2" role="radiogroup" aria-label="Тип операції">
       <label><input type="radio" name="тип" value="витрата" checked> Витрата</label>
@@ -365,7 +577,7 @@ function options(sel, list, current) {
 function syncOpForm(keep) {
   const k = opKind();
   options(opForm.elements['категорія'], k === 'витрата' ? S.expense : S.income, keep && keep['категорія']);
-  options(opForm.elements['рахунок'], S.assets, keep && keep['рахунок']);
+  options(opForm.elements['рахунок'], S.assets, (keep && keep['рахунок']) || S.my_cash);
   $('#cat-label').textContent = k === 'витрата' ? 'Категорія' : 'Джерело доходу';
   $('#acc-label').textContent = k === 'витрата' ? 'З якого рахунку' : 'На який рахунок';
   $('#fixed-box').hidden = k !== 'витрата';
@@ -389,7 +601,7 @@ function renderOps() {
 function renderAccs() {
   const kind = a => a.startsWith('Assets:') ? 'рахунок' : 'джерело доходу';
   const rows = S.builtin.map(b => `<tr><td>${esc(short(b['рахунок']))}</td><td>${kind(b['рахунок'])}</td><td>${esc(b['відкрито'])}</td><td class="num">—</td>
-      <td class="acts"><span class="hint">${b['рахунок'].startsWith('Assets:') ? 'з виписки' : 'з виписки, правила в rules.csv'}</span></td></tr>`)
+      <td class="acts"><span class="hint">${b['рахунок'].startsWith('Assets:Готівка') ? 'готівка, вручну' : b['рахунок'].startsWith('Assets:') ? 'з виписки' : 'з виписки, правила в rules.csv'}</span></td></tr>`)
     .concat(S.accounts.map(a => `<tr class="${editAcc === a['рахунок'] ? 'editing' : ''}"><td>${esc(a['назва'])}</td><td>${kind(a['рахунок'])}</td><td>${esc(a['відкрито'])}</td>
       <td class="num">${a['тип'] === 'рахунок' ? money(+(a['стартовий залишок'] || 0)) : '—'}</td>
       <td class="acts"><button class="link" data-edit-acc="${esc(a['рахунок'])}">Змінити</button><button class="link danger" data-del-acc="${esc(a['рахунок'])}">Видалити</button></td></tr>`));
@@ -474,11 +686,24 @@ fetch('/api/state').then(r => r.json()).then(j => { S = j; resetOp(); resetAcc()
 
 
 def main():
+    if sys.argv[1:] == ["hash"]:
+        password = getpass.getpass("Пароль: ")
+        if password != getpass.getpass("Ще раз: "):
+            raise SystemExit("Паролі не збігаються.")
+        print(hash_password(password))
+        return
+    if not users():
+        raise SystemExit("Не задано TRACKER_USERS (olya=<хеш>,marko=<хеш>). Хеш дає: uv run python app.py hash")
     error = rebuild()
     if error:
         raise SystemExit(f"Облік має помилку, спершу виправте її: {error}")
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Відкрийте http://{HOST}:{PORT} — звіт і форми. Зупинити: Ctrl+C.")
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, *args):
+            pass
+
+    server = make_server("127.0.0.1", 5055, application, handler_class=QuietHandler)
+    print("Відкрийте http://127.0.0.1:5055 — звіт і форми після входу. Зупинити: Ctrl+C.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

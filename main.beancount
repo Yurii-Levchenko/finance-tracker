@@ -7,6 +7,9 @@ option "operating_currency" "PLN"
 ; Рахунки
 2026-07-31 open Assets:Банк:Поточний          PLN
 2026-07-31 open Assets:Банк:Марко             PLN
+; Готівка: витрати з неї додають з телефона на сторінці app.py (стартовий залишок 0).
+2026-07-31 open Assets:Готівка:Оля            PLN
+2026-07-31 open Assets:Готівка:Марко          PLN
 2026-07-31 open Equity:Початковий-Залишок     PLN
 
 2026-07-31 open Income:Зарплата               PLN

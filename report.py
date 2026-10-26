@@ -672,7 +672,7 @@ document.addEventListener('focusout', () => tip.classList.remove('on'));
 let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { goalLine(); rateLine(); stack(); }, 120); });
 let saved = null;
 try { saved = localStorage.getItem('view'); } catch (e) {}
-setView((location.hash || '').slice(1) || saved || ALL.views[0].key);
+setView((location.hash || '').slice(1) || window.DEFAULT_VIEW || saved || ALL.views[0].key);
 """
 
 PAGE = """<!doctype html>

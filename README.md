@@ -29,3 +29,34 @@ uv run python check.py
 - `check.py` — перевірка однією командою (див. вище).
 - `report.py` → `report.html` — звіт; `app.py` — сторінка зі звітом і формами для ручних операцій.
 - `CLAUDE.md`, `PRD.md`, `IMPLEMENTATION_PLAN.md`, `PROGRESS.md` — правила й історія проєкту.
+
+## Сторінка з входом за паролем (`app.py`)
+
+`app.py` — WSGI-застосунок на стандартному Python: звіт з перемикачем «Оля / Марко / Разом» і форма «Додати витрату» (готівка з телефона). Без входу він не показує жодних даних.
+
+Паролі й ключі **не зберігаються ні в коді, ні в репозиторії**. Їх читають зі змінних середовища або з файлу `~/.tracker.env` поза репозиторієм:
+
+```
+TRACKER_USERS=olya=<хеш>,marko=<хеш>
+TRACKER_SECRET=<випадковий рядок>
+```
+
+Хеш пароля (PBKDF2-SHA256) дає команда `uv run python app.py hash`: вона двічі питає пароль і друкує рядок, а сам пароль ніде не записує. Ключ для підпису сесій — `python -c "import secrets; print(secrets.token_hex(32))"`.
+
+Захист:
+- без входу будь-яка сторінка веде на `/login`, а `/api/*` відповідає 401;
+- сесія — підписана cookie з `HttpOnly`, `SameSite=Lax` і `Secure` на HTTPS, діє 30 днів;
+- після 5 невдалих спроб входу з однієї адреси вхід блокується на 15 хвилин;
+- звичайний HTTP перенаправляється на HTTPS, на HTTPS додається заголовок HSTS;
+- форми приймають лише JSON зі своєї ж сторінки (перевірка `Origin`).
+
+Локально: `uv run python app.py` → http://127.0.0.1:5055.
+
+## Розгортання на PythonAnywhere (безкоштовний акаунт)
+
+1. Bash-консоль PythonAnywhere: `git clone https://github.com/<ваш-логін>/my-finance.git`.
+2. Віртуальне середовище: `mkvirtualenv --python=python3.12 tracker`, потім `pip install "beancount>=3.2,<4" beanquery`.
+3. Перевірка: `cd my-finance && python check.py` — має закінчитися «Усе збігається ✓».
+4. Секрети: `python app.py hash` для кожного користувача, потім створити `~/.tracker.env` з `TRACKER_USERS` і `TRACKER_SECRET` і виконати `chmod 600 ~/.tracker.env`.
+5. Вкладка Web → Add a new web app → Manual configuration → Python 3.12. Virtualenv: `/home/<логін>/.virtualenvs/tracker`. У WSGI-файл скопіювати вміст `pythonanywhere_wsgi.py` (замінивши `USERNAME`).
+6. Увімкнути **Force HTTPS**, натиснути **Reload**. Трекер відкривається на `https://<логін>.pythonanywhere.com`.
