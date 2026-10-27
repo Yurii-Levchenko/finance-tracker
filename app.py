@@ -66,6 +66,14 @@ def main_accounts():
 REPORT_STALE = True  # звіт треба перерахувати перед наступним показом
 
 
+def daily_backup():
+    """Копія даних за сьогодні, якщо її ще немає (на безкоштовному тарифі немає планових задач)."""
+    try:
+        backup.write_daily()
+    except OSError as e:  # копія не має ламати роботу трекера
+        print(f"Резервна копія не вдалася: {e}", file=sys.stderr)
+
+
 def rebuild(report_now=True):
     """import.py → перевірка обліку (як bean-check) → report.py. Повертає текст помилки або None.
 
@@ -226,6 +234,7 @@ def apply(accounts, operations):
         manual.write_operations(old_ops)
         rebuild(report_now=False)
         return f"Облік не пройшов перевірку, зміну скасовано: {error}"
+    daily_backup()
     return None
 
 
@@ -425,6 +434,7 @@ def report_page(user):
     with LOCK:
         if REPORT_STALE or not report.OUTPUT.exists():
             rebuild()
+        daily_backup()
     html = report.OUTPUT.read_text(encoding="utf-8")
     # Звіт за замовчуванням — того, хто увійшов (перемикач Оля / Марко / Разом лишається).
     default = f"<script>window.DEFAULT_VIEW={json.dumps(user)}</script>"
@@ -787,7 +797,7 @@ __NAV__
 
 <article class="card">
   <h2>Резервна копія</h2>
-  <p class="sub">Ручні витрати, рахунки, ліміти й виписки одним архівом. Сервер робить копію щодня сам, але збережіть її й у себе, наприклад раз на місяць.</p>
+  <p class="sub">Ручні витрати, рахунки, ліміти й виписки одним архівом. Сервер сам зберігає копію за кожен день користування (30 останніх), але збережіть її й у себе, наприклад раз на місяць.</p>
   <a class="btnlink" href="/backup.zip">Завантажити резервну копію</a>
 </article>
 </div>

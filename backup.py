@@ -1,7 +1,8 @@
 """Резервні копії даних, яких немає в git: ручні витрати, рахунки, ліміти, виписки.
 
 Запуск: python backup.py   → ~/finance-backups/finance-РРРР-ММ-ДД.zip, зберігає 30 останніх.
-На PythonAnywhere — щоденна задача (вкладка Tasks). Ту саму копію можна завантажити
+На безкоштовному PythonAnywhere планових задач немає, тож app.py сам робить копію за день
+при першому відкритті звіту або збереженні витрати. Ту саму копію можна завантажити
 зі сторінки «Додати витрату» (кнопка «Завантажити резервну копію»), щоб мати її поза сервером.
 
 Ключі й паролі (~/.tracker.env) у копію не потрапляють свідомо.
@@ -10,6 +11,7 @@
 
 import datetime as dt
 import io
+import os
 import sys
 import zipfile
 from pathlib import Path
@@ -32,16 +34,24 @@ def build_zip():
     return buffer.getvalue()
 
 
-def main():
-    sys.stdout.reconfigure(encoding="utf-8")
-    target = Path.home() / "finance-backups"
+def write_daily(force=False):
+    """Пише архів за сьогодні (якщо його ще немає або force) і лишає KEEP останніх. → (шлях, видалено старих)."""
+    target = Path(os.environ.get("TRACKER_BACKUP_DIR", Path.home() / "finance-backups"))
     target.mkdir(exist_ok=True)
     path = target / f"finance-{dt.date.today()}.zip"
+    if path.exists() and not force:
+        return path, 0
     path.write_bytes(build_zip())
     old = sorted(target.glob("finance-*.zip"))[:-KEEP]
     for p in old:
         p.unlink()
-    print(f"Записано {path} ({path.stat().st_size} байт); видалено старих: {len(old)}.")
+    return path, len(old)
+
+
+def main():
+    sys.stdout.reconfigure(encoding="utf-8")
+    path, removed = write_daily(force=True)
+    print(f"Записано {path} ({path.stat().st_size} байт); видалено старих: {removed}.")
 
 
 if __name__ == "__main__":
