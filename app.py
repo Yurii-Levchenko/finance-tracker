@@ -109,6 +109,58 @@ def category_usage(user):
     return _usage_cache[key]
 
 
+SPEND_RE = re.compile(r'^(\d{4}-\d{2})-\d{2} \* "(?:[^"\\]|\\.)*"([^\n]*)\n  \S+\s+(-?[\d.]+) PLN\n  (Expenses:\S+)', re.M)
+_spend_cache = {}
+LIMITS_FILE = ROOT / "limits.csv"
+LIMIT_FIELDS = ["хто", "категорія", "ліміт"]
+
+
+def spend_by_month(user):
+    """{місяць: {категорія: витрачено}} для власника — з transactions.beancount (банк + готівка)."""
+    path = ROOT / "transactions.beancount"
+    if not path.exists():
+        return {}
+    key = (user, path.stat().st_mtime)
+    if key not in _spend_cache:
+        out = {}
+        for month, tags, amount, category in SPEND_RE.findall(path.read_text(encoding="utf-8")):
+            if f"#{user}" in tags.split():
+                cats = out.setdefault(month, {})
+                cats[category] = round(cats.get(category, 0) - float(amount), 2)
+        _spend_cache.clear()
+        _spend_cache[key] = out
+    return _spend_cache[key]
+
+
+def read_limits():
+    return manual._read(LIMITS_FILE, LIMIT_FIELDS)
+
+
+def user_limits(user):
+    return {r["категорія"]: float(r["ліміт"]) for r in read_limits() if r["хто"] == user and r["ліміт"]}
+
+
+def save_limits(body, user):
+    """Ліміти користувача: {категорія: сума або порожньо}. Порожнє — ліміту немає."""
+    global REPORT_STALE
+    expense = set(state(user)["expense"])
+    mine = {}
+    for category, value in (body.get("limits") or {}).items():
+        value = str(value).strip()
+        if category not in expense:
+            return f"Невідома категорія {manual.readable(category)}."
+        if value:
+            try:
+                mine[category] = f"{manual.parse_amount(value):.2f}"
+            except ValueError as e:
+                return f"{manual.readable(category)}: {e}"
+    rows = [r for r in read_limits() if r["хто"] != user]
+    rows += [{"хто": user, "категорія": c, "ліміт": v} for c, v in sorted(mine.items())]
+    manual._write(LIMITS_FILE, LIMIT_FIELDS, rows)
+    REPORT_STALE = True  # ліміти показує звіт
+    return None
+
+
 def quick_hints(user, operations, expense):
     """Найчастіші категорії користувача (для кнопок) і памʼять «опис → категорія» з ручних операцій."""
     counts = dict(category_usage(user))
@@ -149,6 +201,12 @@ def state(user=None):
         "today": str(dt.date.today()),
         "shared_default": shared_default_categories(),
         "partner": {"olya": "Марком", "marko": "Олею"}.get(user, "партнером"),
+        "limits": user_limits(user),
+        "spent": (spent := spend_by_month(user)),
+        # Середнє за повні місяці — підказка, який ліміт реалістичний.
+        "avg": {c: round(sum(m.get(c, 0) for m in full) / len(full), 2)
+                for full in [[spent[k] for k in sorted(spent)[:-1]]] if full
+                for c in {c for m in full for c in m}},
         **dict(zip(("top_categories", "memory"), quick_hints(user, operations, expense))),
     }
 
@@ -251,6 +309,7 @@ ACTIONS = {
     "/api/operation/delete": delete_operation,
     "/api/account": save_account,
     "/api/account/delete": delete_account,
+    "/api/limits": save_limits,
 }
 
 
@@ -609,6 +668,9 @@ box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;pointer-events:none;transition:o
 #msg.err{background:var(--bad);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
 button.big{font-size:17px;padding:12px 28px;min-height:48px;width:100%}
+.limits{display:grid;grid-template-columns:1fr 130px;gap:8px 12px;align-items:center;margin-top:8px}
+.limits span{font-size:15px;color:var(--ink)}
+.limits small{display:block;color:var(--muted);font-size:12px}
 .amount input{font-size:30px;font-weight:650;padding:10px 12px;font-variant-numeric:tabular-nums}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chips button{font-size:15px;padding:8px 14px;min-height:40px}
@@ -685,6 +747,14 @@ __NAV__
   <div class="scroll" id="ops"></div>
 </article>
 
+<details class="card more" id="limits-card">
+  <summary><h2>Ліміти на місяць</h2><span class="hint">скільки готові витрачати на категорію; звіт покаже, скільки лишилося</span></summary>
+  <form id="limits-form"><div class="limits" id="limits-rows"></div>
+    <div class="btns" style="margin-top:12px"><button class="primary" type="submit">Зберегти ліміти</button></div>
+    <p class="hint" style="margin-top:8px">Підказка в полі — середнє за минулі місяці. Порожнє поле — без ліміту.</p>
+  </form>
+</details>
+
 <details class="card more">
   <summary><h2 id="acc-title">Рахунки і джерела доходу</h2><span class="hint">рідко потрібно: нова картка, нове джерело доходу</span></summary>
   <p class="sub">Рахунок — де лежать гроші (готівка, інша картка); вони рахуються в подушку безпеки. Джерело доходу — звідки гроші приходять.</p>
@@ -730,7 +800,7 @@ async function post(url, body, okText, undo) {
   const j = await r.json();
   if (j.state) { S = j.state; }
   if (j.error) { say(j.error, false); return false; }
-  say(okText, true, undo); return true;
+  say(typeof okText === 'function' ? okText() : okText, true, undo); return true;
 }
 
 const opForm = $('#op-form'), accForm = $('#acc-form');
@@ -782,6 +852,19 @@ function rememberCategory() {
     opForm.elements['категорія'].value = m['категорія']; markChip();
   }
 }
+
+function renderLimits() {
+  $('#limits-rows').innerHTML = S.expense.map(c => {
+    const v = S.limits[c], avg = S.avg[c];
+    return `<label for="lim-${esc(c)}"><span>${esc(short(c))}</span><small>${avg ? 'середнє ' + money(avg) : 'ще не витрачали'}</small></label>
+      <input id="lim-${esc(c)}" data-limit="${esc(c)}" inputmode="decimal" placeholder="${avg ? Math.round(avg) : '—'}" value="${v ? String(v).replace('.', ',') : ''}">`;
+  }).join('');
+}
+$('#limits-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const limits = {}; document.querySelectorAll('[data-limit]').forEach(i => limits[i.dataset.limit] = i.value);
+  if (await post('/api/limits', {limits}, 'Ліміти збережено. Їх видно у звіті.')) renderLimits();
+});
 
 function renderOps() {
   const ops = [...S.operations].sort((a, b) => b['дата'].localeCompare(a['дата']) || b.id - a.id);
@@ -851,7 +934,14 @@ opForm.addEventListener('submit', async e => {
     const added = S.operations.find(o => !before.has(o.id));
     if (added && await post('/api/operation/delete', {id: added.id}, 'Скасовано.')) renderOps();
   };
-  const ok = await post('/api/operation', body, editing ? 'Зміни збережено.' : `Збережено: ${what}.`, undo);
+  // Після збереження — нагадування про ліміт цієї категорії: «Кафе: 412 з 500 зл».
+  const limitNote = () => {
+    const c = body['категорія'], lim = S.limits[c];
+    if (!lim || body['тип'] !== 'витрата') return '';
+    const spent = (S.spent[body['дата'].slice(0, 7)] || {})[c] || 0, pct = Math.round(spent / lim * 100);
+    return ` ${short(c)}: ${money(spent)} з ${money(lim)}` + (pct >= 100 ? ' — ліміт перевищено!' : pct >= 80 ? ` (${pct} %)` : '');
+  };
+  const ok = await post('/api/operation', body, () => (editing ? 'Зміни збережено.' : `Збережено: ${what}.`) + limitNote(), undo);
   btn.disabled = false; btn.textContent = editOp ? 'Зберегти зміни' : 'Зберегти';
   if (ok) resetOp(!editing); else renderAll();
 });
@@ -899,7 +989,7 @@ document.addEventListener('click', async e => {
   }
 });
 
-fetch('/api/state').then(r => r.json()).then(j => { S = j; resetOp(true); resetAcc(); });
+fetch('/api/state').then(r => r.json()).then(j => { S = j; resetOp(true); resetAcc(); renderLimits(); });
 </script>
 </body>
 </html>

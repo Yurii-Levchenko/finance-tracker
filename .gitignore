@@ -9,3 +9,4 @@ __pycache__/
 # Ручні дані (готівка, рахунки з app.py) — особисті, у git не потрапляють
 accounts.csv
 manual.csv
+limits.csv

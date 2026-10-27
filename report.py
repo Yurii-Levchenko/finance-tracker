@@ -346,6 +346,12 @@ color:var(--ink);padding:7px 14px;border-radius:999px;cursor:pointer}
 .switch button:focus-visible,.who button:focus-visible,.hit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .who{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
 .debt-total{font-size:24px;font-weight:650;margin:4px 0 2px}
+.lrow{margin:0 0 12px}
+.lrow .lab{display:flex;justify-content:space-between;gap:12px;font-size:15px;margin-bottom:4px}
+.lrow .lab span:last-child{font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.ltrack{height:10px;border-radius:999px;background:var(--track);overflow:hidden}
+.ltrack i{display:block;height:100%;border-radius:999px}
+.lrow small{font-size:13px}
 #debt .tile .v{font-size:20px;white-space:normal}
 .switch .note{color:var(--muted);font-size:14px;margin-left:4px}
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 16px}
@@ -647,7 +653,31 @@ function debt() {
     (Math.abs(cur.settled) >= 0.005 ? `; переказано між вами ${money(Math.abs(cur.settled))}.` : '. Переказів між вами цього місяця не було.');
 }
 
-function render() { texts(); tiles(); debt(); categoryBars(); heat(); rateLine(); stack(); }
+// Ліміти обраного звіту: Оля / Марко — свої, «Разом» — сума обох.
+function limitsCard() {
+  const L = ALL.limits || {}, box = $('#limits'), m = M[sel];
+  let lim = {};
+  if (D.key === 'all') { for (const o of Object.values(L)) for (const [c, v] of Object.entries(o)) lim[c] = (lim[c] || 0) + v; }
+  else lim = L[D.key] || {};
+  const cats = Object.keys(lim).sort((a, b) => (m.categories[b] || 0) / lim[b] - (m.categories[a] || 0) / lim[a]);
+  box.hidden = !cats.length;
+  if (!cats.length) return;
+  const [y, mo] = m.key.split('-').map(Number), days = new Date(y, mo, 0).getDate();
+  const daysLeft = m.incomplete ? Math.max(1, days - parseInt(m.until)) : 0;
+  $('#limits-sub').textContent = m.incomplete ? `${mName(m)}: лишилося ${daysLeft} дн. до кінця місяця` : mName(m);
+  $('#limits-rows').innerHTML = cats.map(c => {
+    const spent = m.categories[c] || 0, cap = lim[c], pct = spent / cap;
+    const color = pct >= 1 ? 'var(--bad)' : pct >= 0.8 ? 'var(--s2)' : 'var(--s3)';
+    const left = cap - spent;
+    const note = left < 0 ? `перевищено на ${money(-left)}` :
+      m.incomplete ? `лишилося ${money(left)}, ≈ ${money(left / daysLeft)} на день` : `лишилося ${money(left)}`;
+    return `<div class="lrow"><div class="lab"><span>${esc(c)}</span><span>${money(spent)} з ${money(cap)}</span></div>
+      <div class="ltrack"><i style="width:${Math.min(100, pct * 100).toFixed(1)}%;background:${color}"></i></div>
+      <small style="color:${pct >= 1 ? 'var(--bad)' : 'var(--ink-2)'}">${note}</small></div>`;
+  }).join('');
+}
+
+function render() { texts(); tiles(); limitsCard(); debt(); categoryBars(); heat(); rateLine(); stack(); }
 
 function select(i) { sel = i; render(); }
 
@@ -741,6 +771,12 @@ PAGE = """<!doctype html>
 
   <section class="tiles" id="tiles" aria-label="Головні цифри"></section>
 
+  <article class="card" id="limits" hidden>
+    <h2>Ліміти на місяць</h2>
+    <p class="sub" id="limits-sub"></p>
+    <div id="limits-rows"></div>
+  </article>
+
   <article class="card">
     <h2>1. Скільки грошей іде на кожну категорію?</h2>
     <p class="sub">Витрати обраного місяця за категоріями; під сумою — частка і зміна до минулого місяця.</p>
@@ -796,9 +832,25 @@ def shared_summary(conn, saved):
                 "settled": (sent["marko"].get(k, 0.0) - sent["olya"].get(k, 0.0)) / 2} for k in keys}
 
 
+LIMITS_FILE = ROOT / "limits.csv"
+
+
+def read_limits():
+    """{власник: {назва категорії у звіті: ліміт}} з limits.csv (його правлять форми app.py)."""
+    import csv
+    out = {}
+    if LIMITS_FILE.exists():
+        with LIMITS_FILE.open(encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                if r.get("ліміт"):
+                    out.setdefault(r["хто"], {})[label(r["категорія"])] = float(r["ліміт"])
+    return out
+
+
 def render(views, shared=None):
     """views — [{key, label, …page_data}] для Олі, Марка і разом; перший — звіт за замовчуванням."""
-    payload = json.dumps({"views": views, "shared": shared or {}}, ensure_ascii=False).replace("</", "<\\/")
+    payload = json.dumps({"views": views, "shared": shared or {}, "limits": read_limits()},
+                         ensure_ascii=False).replace("</", "<\\/")
     return (PAGE.replace("__CSS__", CSS)
                 .replace("__JS__", JS)
                 .replace("__DATA__", payload)
