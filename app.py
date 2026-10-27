@@ -37,6 +37,7 @@ from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 from beancount import loader
 
+import backup
 import manual
 import report
 
@@ -541,7 +542,7 @@ PUBLIC = {
 def respond(start_response, status, body=b"", ctype="text/html", headers=(), https=False):
     if isinstance(body, str):
         body = body.encode("utf-8")
-    charset = "" if ctype.startswith("image/") else "; charset=utf-8"
+    charset = "" if ctype.startswith(("image/", "application/zip")) else "; charset=utf-8"
     base = [("Content-Type", f"{ctype}{charset}"), ("Content-Length", str(len(body))),
             ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
             ("X-Frame-Options", "DENY"), ("Referrer-Policy", "same-origin")]
@@ -613,6 +614,12 @@ def application(environ, start_response):
 
     if method == "GET" and path == "/":
         return respond(start_response, "200 OK", report_page(user), https=https)
+    if method == "GET" and path == "/backup.zip":
+        with LOCK:
+            data = backup.build_zip()
+        name = f"finance-backup-{dt.date.today()}.zip"
+        return respond(start_response, "200 OK", data, "application/zip", https=https,
+                       headers=[("Content-Disposition", f'attachment; filename="{name}"')])
     if method == "GET" and path == "/manage":
         return respond(start_response, "200 OK", manage_page(user), https=https)
     if method == "GET" and path == "/api/state":
@@ -668,6 +675,8 @@ box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;pointer-events:none;transition:o
 #msg.err{background:var(--bad);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
 button.big{font-size:17px;padding:12px 28px;min-height:48px;width:100%}
+.btnlink{display:inline-block;text-decoration:none;font-size:15px;border-radius:999px;padding:10px 18px;
+border:1px solid var(--border);background:var(--surface);color:var(--ink)}
 .limits{display:grid;grid-template-columns:1fr 130px;gap:8px 12px;align-items:center;margin-top:8px}
 .limits span{font-size:15px;color:var(--ink)}
 .limits small{display:block;color:var(--muted);font-size:12px}
@@ -775,6 +784,12 @@ __NAV__
     </div>
   </form>
 </details>
+
+<article class="card">
+  <h2>Резервна копія</h2>
+  <p class="sub">Ручні витрати, рахунки, ліміти й виписки одним архівом. Сервер робить копію щодня сам, але збережіть її й у себе, наприклад раз на місяць.</p>
+  <a class="btnlink" href="/backup.zip">Завантажити резервну копію</a>
+</article>
 </div>
 
 <script>

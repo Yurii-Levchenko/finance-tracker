@@ -60,3 +60,4 @@ TRACKER_SECRET=<випадковий рядок>
 4. Секрети: `python app.py setup` генерує паролі для olya і marko та ключ сесій, записує `~/.tracker.env` з правами лише для власника і один раз показує паролі. Або вручну: `python app.py hash` для кожного користувача.
 5. Вкладка Web → Add a new web app → Manual configuration → Python 3.12. Virtualenv: `/home/<логін>/.virtualenvs/tracker`. У WSGI-файл скопіювати вміст `pythonanywhere_wsgi.py` (замінивши `USERNAME`).
 6. Увімкнути **Force HTTPS**, натиснути **Reload**. Трекер відкривається на `https://<логін>.pythonanywhere.com`.
+7. Резервні копії: вкладка Tasks → щоденна задача `/home/<логін>/.virtualenvs/tracker/bin/python /home/<логін>/finance-tracker/backup.py`. Копію можна й завантажити зі сторінки «Додати витрату».
