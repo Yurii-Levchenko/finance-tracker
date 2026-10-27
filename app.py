@@ -62,13 +62,25 @@ def main_accounts():
             for m in re.finditer(r"^(\d{4}-\d{2}-\d{2}) open (\S+)", text, re.M)}
 
 
-def rebuild():
-    """import.py → перевірка обліку → report.py. Повертає текст помилки або None."""
+REPORT_STALE = True  # звіт треба перерахувати перед наступним показом
+
+
+def rebuild(report_now=True):
+    """import.py → перевірка обліку (як bean-check) → report.py. Повертає текст помилки або None.
+
+    report_now=False: звіт не перераховуємо одразу (це ~3 с), а позначаємо застарілим —
+    його перерахує report_page, коли звіт справді відкриють. Збереження витрати лишається миттєвим.
+    """
+    global REPORT_STALE
     bank_import.main()
     _, errors, _ = loader.load_file(str(LEDGER))
     if errors:
         return errors[0].message
-    report.main()
+    if report_now:
+        report.main()
+        REPORT_STALE = False
+    else:
+        REPORT_STALE = True
     return None
 
 
@@ -77,22 +89,57 @@ NAMES = {"olya": "Оля", "marko": "Марко"}
 CASH = {"olya": "Assets:Готівка:Оля", "marko": "Assets:Готівка:Марко"}
 
 
+TX_RE = re.compile(r'^\d{4}-\d{2}-\d{2} \* "(?:[^"\\]|\\.)*"([^\n]*)\n  \S+\s+-?[\d.]+ PLN\n  (Expenses:\S+)', re.M)
+_usage_cache = {}
+
+
+def category_usage(user):
+    """Скільки витрат у кожній категорії має цей власник (з transactions.beancount, кешується за часом зміни)."""
+    path = ROOT / "transactions.beancount"
+    if not path.exists():
+        return {}
+    key = (user, path.stat().st_mtime)
+    if key not in _usage_cache:
+        counts = {}
+        for tags, category in TX_RE.findall(path.read_text(encoding="utf-8")):
+            if f"#{user}" in tags.split():
+                counts[category] = counts.get(category, 0) + 1
+        _usage_cache.clear()
+        _usage_cache[key] = counts
+    return _usage_cache[key]
+
+
+def quick_hints(user, operations, expense):
+    """Найчастіші категорії користувача (для кнопок) і памʼять «опис → категорія» з ручних операцій."""
+    counts = dict(category_usage(user))
+    for o in operations:
+        if o.get("хто") == user and o["категорія"] in expense:
+            counts[o["категорія"]] = counts.get(o["категорія"], 0) + 3  # ручні важать більше: це саме готівка
+    top = sorted((c for c in expense if counts.get(c)), key=lambda c: -counts[c])[:6]
+    memory = {}
+    for o in sorted(operations, key=lambda o: (o.get("хто") == user, o["дата"], int(o["id"]))):
+        memory[o["опис"].strip().lower()] = {"категорія": o["категорія"], "тип": o["тип"]}
+    return top, memory
+
+
 def state(user=None):
     known = main_accounts()
     accounts = manual.read_accounts()
     mine = [a["рахунок"] for a in accounts]
+    operations = manual.read_operations()
     cash = [a for a in known if a.startswith("Assets:") and a not in manual.BANK_ACCOUNTS]
     return {
         "me": user,
         "my_cash": CASH.get(user),
         "accounts": accounts,
-        "operations": manual.read_operations(),
+        "operations": operations,
         "builtin": [{"рахунок": a, "відкрито": str(d)} for a, d in known.items()
                     if a.split(":")[0] in ("Assets", "Income")],
-        "expense": [a for a in known if a.startswith("Expenses:") and a != "Expenses:Без-Категорії"],
+        "expense": (expense := [a for a in known if a.startswith("Expenses:") and a != "Expenses:Без-Категорії"]),
         "income": [a for a in known if a.startswith("Income:")] + [a for a in mine if a.startswith("Income:")],
         "assets": cash + [a for a in mine if a.startswith("Assets:")],
         "today": str(dt.date.today()),
+        **dict(zip(("top_categories", "memory"), quick_hints(user, operations, expense))),
     }
 
 
@@ -104,11 +151,11 @@ def apply(accounts, operations):
     old_accounts, old_ops = manual.read_accounts(), manual.read_operations()
     manual.write_accounts(accounts)
     manual.write_operations(operations)
-    error = rebuild()
+    error = rebuild(report_now=False)
     if error:
         manual.write_accounts(old_accounts)
         manual.write_operations(old_ops)
-        rebuild()
+        rebuild(report_now=False)
         return f"Облік не пройшов перевірку, зміну скасовано: {error}"
     return None
 
@@ -304,8 +351,9 @@ FAB_CSS = (".fab{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inse
 
 
 def report_page(user):
-    if not report.OUTPUT.exists():
-        rebuild()
+    with LOCK:
+        if REPORT_STALE or not report.OUTPUT.exists():
+            rebuild()
     html = report.OUTPUT.read_text(encoding="utf-8")
     # Звіт за замовчуванням — того, хто увійшов (перемикач Оля / Марко / Разом лишається).
     default = f"<script>window.DEFAULT_VIEW={json.dumps(user)}</script>"
@@ -393,6 +441,8 @@ MANIFEST = json.dumps({
     "lang": "uk",
     "icons": [{"src": path, "sizes": f"{n}x{n}", "type": "image/png", "purpose": "any maskable"}
               for path, n in (("/icon-192.png", 192), ("/icon-512.png", 512))],
+    "shortcuts": [{"name": "Додати витрату", "short_name": "Витрата", "url": "/manage",
+                   "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"}]}],
 }, ensure_ascii=False)
 
 # Без кешування: фінансові дані не лишаються в памʼяті телефона, усе йде в мережу.
@@ -547,7 +597,17 @@ box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;pointer-events:none;transition:o
 #msg.on{opacity:1;pointer-events:auto}
 #msg.err{background:var(--bad);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
-button.big{font-size:17px;padding:12px 28px;min-height:48px}
+button.big{font-size:17px;padding:12px 28px;min-height:48px;width:100%}
+.amount input{font-size:30px;font-weight:650;padding:10px 12px;font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{font-size:15px;padding:8px 14px;min-height:40px}
+.chips button.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+details.extra{border:1px solid var(--border);border-radius:10px;padding:8px 12px}
+details.extra summary{cursor:pointer;font-size:14px;color:var(--ink-2)}
+details.extra summary b{color:var(--ink);font-weight:600}
+details.extra[open] summary{margin-bottom:10px}
+details.extra .inner{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px}
+#msg button.undo{margin-left:10px;padding:4px 12px;font-size:14px;background:var(--surface);color:var(--ink);border:0}
 details.more summary{cursor:pointer;list-style:none}
 details.more summary::-webkit-details-marker{display:none}
 details.more summary h2::before{content:"▸ ";color:var(--muted)}
@@ -561,7 +621,7 @@ table.list{width:100%;border-collapse:collapse;font-size:14px}
 .list tr.editing td{background:var(--page)}
 .tag{display:inline-block;font-size:12px;color:var(--ink-2);border:1px solid var(--border);border-radius:999px;padding:0 7px;margin-left:4px}
 .empty{color:var(--muted);font-size:14px;margin:0}
-@media (max-width:640px){form.grid{grid-template-columns:1fr}
+@media (max-width:640px){form.grid{grid-template-columns:1fr}details.extra .inner{grid-template-columns:1fr}
 .list thead{display:none}.list tr{display:grid;grid-template-columns:1fr auto;padding:6px 0;border-bottom:1px solid var(--grid)}
 .list td{border:none;padding:2px 0}.list td.acts{grid-column:1/-1}}
 """
@@ -588,12 +648,18 @@ __NAV__
       <label><input type="radio" name="тип" value="витрата" checked> Витрата</label>
       <label><input type="radio" name="тип" value="дохід"> Дохід</label>
     </div>
-    <label>Сума, зл<input name="сума" inputmode="decimal" placeholder="20,00" required autocomplete="off"></label>
-    <label>Що купили<input name="опис" placeholder="Кава, ринок…" required maxlength="120" autocomplete="off"></label>
-    <label><span id="cat-label">Категорія</span><select name="категорія" required></select></label>
-    <label><span id="acc-label">З якого рахунку</span><select name="рахунок" required></select></label>
-    <label>Дата<input type="date" name="дата" required></label>
-    <label class="check full" id="fixed-box"><input type="checkbox" name="фіксована"> Фіксована витрата (щомісяця однакова)</label>
+    <label class="full amount">Сума, зл<input name="сума" inputmode="decimal" placeholder="0,00" required autocomplete="off" enterkeyhint="next"></label>
+    <label class="full">Що купили<input name="опис" placeholder="Кава, ринок…" required maxlength="120" autocomplete="off" list="desc-list" enterkeyhint="done"></label>
+    <datalist id="desc-list"></datalist>
+    <div class="full"><span class="hint" id="chips-label">Категорія</span><div class="chips" id="cat-chips"></div></div>
+    <label class="full"><span id="cat-label">Або інша категорія</span><select name="категорія" required></select></label>
+    <details class="full extra" id="extra"><summary><span id="extra-sum"></span> · змінити</summary>
+      <div class="inner">
+        <label><span id="acc-label">З якого рахунку</span><select name="рахунок" required></select></label>
+        <label>Дата<input type="date" name="дата" required></label>
+        <label class="check" id="fixed-box"><input type="checkbox" name="фіксована"> Фіксована (щомісяця однакова)</label>
+      </div>
+    </details>
     <div class="full btns">
       <button class="primary big" type="submit" id="op-save">Зберегти</button>
       <button type="button" id="op-cancel" hidden>Скасувати</button>
@@ -638,17 +704,21 @@ const short = a => a.split(':').slice(1).join(' · ').replaceAll('-', ' ');
 let S = null, editOp = null, editAcc = null;
 
 let sayT;
-function say(text, ok) {
+function say(text, ok, undo) {
   const m = $('#msg'); m.textContent = text; m.className = 'on ' + (ok ? 'ok' : 'err');
-  clearTimeout(sayT); sayT = setTimeout(() => m.className = '', ok ? 3500 : 8000);
+  if (undo) {
+    const b = document.createElement('button'); b.className = 'undo'; b.type = 'button'; b.textContent = 'Скасувати';
+    b.onclick = () => { m.className = ''; undo(); }; m.append(b);
+  }
+  clearTimeout(sayT); sayT = setTimeout(() => m.className = '', undo ? 6000 : ok ? 3500 : 8000);
 }
 
-async function post(url, body, okText) {
+async function post(url, body, okText, undo) {
   const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   const j = await r.json();
   if (j.state) { S = j.state; }
   if (j.error) { say(j.error, false); return false; }
-  say(okText + ' Звіт перераховано.', true); return true;
+  say(okText, true, undo); return true;
 }
 
 const opForm = $('#op-form'), accForm = $('#acc-form');
@@ -666,12 +736,35 @@ function syncOpForm(keep) {
   // Без вибору за замовчуванням: інакше кава легко зберігається як «Житло».
   if (!(keep && keep['категорія'])) opForm.elements['категорія'].insertAdjacentHTML('afterbegin', '<option value="" selected disabled>Оберіть категорію…</option>');
   options(opForm.elements['рахунок'], S.assets, (keep && keep['рахунок']) || S.my_cash);
-  $('#cat-label').textContent = k === 'витрата' ? 'Категорія' : 'Джерело доходу';
+  $('#cat-label').textContent = k === 'витрата' ? 'Або інша категорія' : 'Або інше джерело';
   $('#acc-label').textContent = k === 'витрата' ? 'З якого рахунку' : 'На який рахунок';
   $('#fixed-box').hidden = k !== 'витрата';
+  // Кнопки найчастіших категорій: вибір в один дотик.
+  const top = k === 'витрата' ? S.top_categories : S.income.slice(0, 4);
+  $('#chips-label').textContent = k === 'витрата' ? 'Категорія' : 'Джерело доходу';
+  $('#cat-chips').innerHTML = top.map(c => `<button type="button" data-cat="${esc(c)}">${esc(short(c))}</button>`).join('');
+  $('#desc-list').innerHTML = Object.keys(S.memory).map(d => `<option value="${esc(d)}">`).join('');
+  markChip(); extraSummary();
   const none = !S.assets.length;
   $('#op-hint').textContent = none ? 'Спершу додайте рахунок (наприклад, «Готівка») у блоці «Рахунки і джерела доходу» нижче.' : '';
   $('#op-save').disabled = none;
+}
+
+function markChip() {
+  const v = opForm.elements['категорія'].value;
+  document.querySelectorAll('#cat-chips button').forEach(b => b.classList.toggle('on', b.dataset.cat === v));
+}
+function extraSummary() {
+  const acc = opForm.elements['рахунок'].value, d = opForm.elements['дата'].value;
+  const when = d === S.today ? 'сьогодні' : d.split('-').reverse().join('.');
+  $('#extra-sum').innerHTML = `<b>${esc(acc ? short(acc) : '—')}</b>, ${esc(when)}`;
+}
+function rememberCategory() {
+  // «Кава» → категорія, обрана для цього опису минулого разу.
+  const m = S.memory[opForm.elements['опис'].value.trim().toLowerCase()];
+  if (m && m['тип'] === opKind() && [...opForm.elements['категорія'].options].some(o => o.value === m['категорія'])) {
+    opForm.elements['категорія'].value = m['категорія']; markChip();
+  }
 }
 
 function renderOps() {
@@ -704,10 +797,11 @@ function syncAccForm() {
     name.replace(/[ʼ'’`"]/g, '').split(/\\s+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join('-') : '';
 }
 
-function resetOp() {
-  editOp = null; opForm.reset(); opForm.elements['дата'].value = S.today;
+function resetOp(focus) {
+  editOp = null; opForm.reset(); opForm.elements['дата'].value = S.today; $('#extra').open = false;
   $('#op-title').textContent = 'Нова операція'; $('#op-save').textContent = 'Зберегти'; $('#op-cancel').hidden = true;
   syncOpForm(); renderOps();
+  if (focus) opForm.elements['сума'].focus();
 }
 function resetAcc() {
   editAcc = null; accForm.reset(); accForm.elements['відкрито'].value = S.today;
@@ -716,7 +810,15 @@ function resetAcc() {
 }
 function renderAll() { syncOpForm(editOp && S.operations.find(o => o.id === editOp)); renderOps(); renderAccs(); }
 
-opForm.addEventListener('change', e => { if (e.target.name === 'тип') syncOpForm(); });
+opForm.addEventListener('change', e => {
+  if (e.target.name === 'тип') syncOpForm();
+  if (e.target.name === 'категорія') markChip();
+  if (e.target.name === 'рахунок' || e.target.name === 'дата') extraSummary();
+  if (e.target.name === 'опис') rememberCategory();
+});
+opForm.elements['опис'].addEventListener('input', rememberCategory);
+// Enter у сумі веде до опису, а не відправляє форму.
+opForm.elements['сума'].addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); opForm.elements['опис'].focus(); } });
 accForm.addEventListener('input', syncAccForm);
 $('#op-cancel').onclick = resetOp;
 $('#acc-cancel').onclick = resetAcc;
@@ -725,7 +827,16 @@ opForm.addEventListener('submit', async e => {
   e.preventDefault();
   const body = {id: editOp || ''};
   ['тип', 'дата', 'сума', 'опис', 'категорія', 'рахунок', 'фіксована'].forEach(n => body[n] = n === 'тип' ? opKind() : val(opForm, n));
-  if (await post('/api/operation', body, editOp ? 'Операцію змінено.' : 'Операцію додано.')) resetOp(); else renderAll();
+  const before = new Set(S.operations.map(o => o.id)), editing = editOp;
+  const btn = $('#op-save'); btn.disabled = true; btn.textContent = 'Зберігаю…';
+  const what = `${body['опис']}, ${money(+String(body['сума']).replace(',', '.'))}`;
+  const undo = editing ? null : async () => {
+    const added = S.operations.find(o => !before.has(o.id));
+    if (added && await post('/api/operation/delete', {id: added.id}, 'Скасовано.')) renderOps();
+  };
+  const ok = await post('/api/operation', body, editing ? 'Зміни збережено.' : `Збережено: ${what}.`, undo);
+  btn.disabled = false; btn.textContent = editOp ? 'Зберегти зміни' : 'Зберегти';
+  if (ok) resetOp(!editing); else renderAll();
 });
 accForm.addEventListener('submit', async e => {
   e.preventDefault();
@@ -736,7 +847,10 @@ accForm.addEventListener('submit', async e => {
 
 document.addEventListener('click', async e => {
   const t = e.target;
-  if (t.dataset.editOp) {
+  if (t.dataset.cat) {
+    opForm.elements['категорія'].value = t.dataset.cat; markChip();
+    if (!opForm.elements['опис'].value) opForm.elements['опис'].focus();
+  } else if (t.dataset.editOp) {
     const o = S.operations.find(x => x.id === t.dataset.editOp); editOp = o.id;
     opForm.querySelector(`[name="тип"][value="${o['тип']}"]`).checked = true;
     syncOpForm(o);
@@ -744,6 +858,7 @@ document.addEventListener('click', async e => {
     opForm.elements['сума'].value = String(o['сума']).replace('.', ',');
     opForm.elements['фіксована'].checked = o['фіксована'] === 'так';
     $('#op-title').textContent = 'Змінити операцію'; $('#op-save').textContent = 'Зберегти зміни'; $('#op-cancel').hidden = false;
+    $('#extra').open = true; extraSummary(); markChip();
     renderOps(); opForm.scrollIntoView({behavior: 'smooth', block: 'start'}); opForm.elements['сума'].focus({preventScroll: true});
   } else if (t.dataset.delOp) {
     const o = S.operations.find(x => x.id === t.dataset.delOp);
@@ -766,7 +881,7 @@ document.addEventListener('click', async e => {
   }
 });
 
-fetch('/api/state').then(r => r.json()).then(j => { S = j; resetOp(); resetAcc(); });
+fetch('/api/state').then(r => r.json()).then(j => { S = j; resetOp(true); resetAcc(); });
 </script>
 </body>
 </html>
