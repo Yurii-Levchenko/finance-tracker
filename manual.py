@@ -19,7 +19,7 @@ MANUAL_FILE = ROOT / "manual.csv"
 
 # «власник» / «хто» — тег власника (olya / marko): хто додав рахунок чи операцію.
 ACCOUNT_FIELDS = ["рахунок", "тип", "назва", "відкрито", "стартовий залишок", "власник"]
-MANUAL_FIELDS = ["id", "дата", "тип", "опис", "сума", "категорія", "рахунок", "фіксована", "хто"]
+MANUAL_FIELDS = ["id", "дата", "тип", "опис", "сума", "категорія", "рахунок", "фіксована", "хто", "спільна"]
 OWNERS = ("olya", "marko")
 
 BANK_ACCOUNTS = ("Assets:Банк:Поточний", "Assets:Банк:Марко")
@@ -167,7 +167,8 @@ def beancount_text(accounts, operations):
     for op in operations:
         amount = parse_amount(op["сума"])
         sign = -1 if op["тип"] == "витрата" else 1
-        tags = " #manual" + owner_tag(op.get("хто")) + (" #fixed" if op["фіксована"] == "так" else "")
+        tags = (" #manual" + owner_tag(op.get("хто")) + (" #fixed" if op["фіксована"] == "так" else "")
+                + (" #shared" if op.get("спільна") == "так" else ""))
         parts.append(
             f"{op['дата']} * {quote(op['опис'])}{tags}\n"
             f"  {op['рахунок']}  {sign * amount:.2f} {CURRENCY}\n"

@@ -38,22 +38,23 @@ CURRENCY = "PLN"
 
 
 def load_rules():
-    """Правила у порядку файлу: (шаблон у нижньому регістрі, рахунок, фіксована)."""
+    """Правила у порядку файлу: (шаблон у нижньому регістрі, рахунок, фіксована, спільна)."""
+    yes = lambda value: (value or "").strip().lower() == "так"
     with RULES_FILE.open(encoding="utf-8-sig", newline="") as f:
         return [
-            (row["шаблон"].strip().lower(), row["рахунок"].strip(), row["фіксована"].strip().lower() == "так")
+            (row["шаблон"].strip().lower(), row["рахунок"].strip(), yes(row["фіксована"]), yes(row.get("спільна")))
             for row in csv.DictReader(f)
             if row["шаблон"].strip()
         ]
 
 
 def categorize(description, amount, rules):
-    """Перше правило, шаблон якого є в описі, перемагає."""
+    """Перше правило, шаблон якого є в описі, перемагає. → (рахунок, фіксована, спільна)."""
     text = description.lower()
-    for pattern, account, fixed in rules:
+    for pattern, account, fixed, shared in rules:
         if pattern in text:
-            return account, fixed
-    return (UNCATEGORIZED_INCOME if amount > 0 else UNCATEGORIZED_EXPENSE), False
+            return account, fixed, shared
+    return (UNCATEGORIZED_INCOME if amount > 0 else UNCATEGORIZED_EXPENSE), False, False
 
 
 def read_olya(path):
@@ -131,8 +132,9 @@ def quote(text):
 
 
 def transaction(row, rules):
-    account, fixed = categorize(row["description"], row["amount"], rules)
-    tags = f" #{row['owner']}" + (" #fixed" if fixed else "")
+    account, fixed, shared = categorize(row["description"], row["amount"], rules)
+    # #shared — спільна витрата пари (ділиться навпіл у розрахунку «хто кому винен»; сума в обліку не змінюється).
+    tags = f" #{row['owner']}" + (" #fixed" if fixed else "") + (" #shared" if shared else "")
     return (
         f"{row['date']} * {quote(row['description'])}{tags}\n"
         f"  {row['account']}  {row['amount']:.2f} {CURRENCY}\n"

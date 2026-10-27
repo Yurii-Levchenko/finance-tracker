@@ -30,6 +30,8 @@ Q_CATEGORIES = "1 Витрати за категоріями"
 Q_SAVINGS = "2 Норма заощаджень"
 Q_FIXED = "3 Фіксовані і змінні"
 Q_ACCOUNT = "5 Рух по рахунках"
+Q_SHARED = "6 Спільні витрати"
+Q_SETTLE = "7 Розрахунки між партнерами"
 
 # Подушка безпеки: ціль — стільки місяців середніх витрат, і дата, до якої Оля хоче її мати
 # («до літа» — до 1 червня 2027).
@@ -283,6 +285,7 @@ def page_data(months, results):
             "key": m.strftime("%Y-%m"),
             "name": MONTHS[m.month].capitalize(),
             "loc": MONTHS_LOC[m.month],
+            "gen": MONTHS_GEN[m.month],
             "year": m.year,
             "incomplete": info["incomplete"],
             "until": f"{d.day:02d}.{d.month:02d}" if info["incomplete"] else None,
@@ -342,6 +345,8 @@ color:var(--ink);padding:7px 14px;border-radius:999px;cursor:pointer}
 .switch button[aria-pressed=true],.who button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .switch button:focus-visible,.who button:focus-visible,.hit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .who{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
+.debt-total{font-size:24px;font-weight:650;margin:4px 0 2px}
+#debt .tile .v{font-size:20px;white-space:normal}
 .switch .note{color:var(--muted);font-size:14px;margin-left:4px}
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 16px}
 .tile{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px}
@@ -620,7 +625,29 @@ function goalLine() {
   box.innerHTML = s + '</svg>';
 }
 
-function render() { texts(); tiles(); categoryBars(); heat(); rateLine(); stack(); }
+// Хто кому винен: спільні витрати (#shared) навпіл мінус перекази між партнерами.
+// Борг > 0 — Марко винен Олі, < 0 — Оля винна Марку. Не залежить від перемикача «чий звіт».
+function debt() {
+  const SH = ALL.shared || {}, m = M[sel], keys = Object.keys(SH).sort();
+  const box = $('#debt');
+  if (!keys.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const zero = {olya: 0, marko: 0, settled: 0};
+  const owe = v => (v.olya - v.marko) / 2 - v.settled;
+  const cur = SH[m.key] || zero, monthDebt = owe(cur);
+  const total = keys.filter(k => k <= m.key).reduce((a, k) => a + owe(SH[k]), 0);
+  const who = d => Math.abs(d) < 0.005 ? 'Ви в розрахунку' : d > 0 ? `Марко винен Олі ${money(d)}` : `Оля винна Марку ${money(-d)}`;
+  const sum = cur.olya + cur.marko;
+  $('#debt-total').textContent = who(total);
+  $('#debt-since').textContent = `загалом з 1 ${M[0].gen} до ${m.incomplete ? m.until : 'кінця ' + m.gen}`;
+  $('#debt-month').innerHTML = `<div class="tile"><p class="k">Оля заплатила</p><p class="v">${money(cur.olya)}</p></div>` +
+    `<div class="tile"><p class="k">Марко заплатив</p><p class="v">${money(cur.marko)}</p></div>` +
+    `<div class="tile"><p class="k">За ${esc(mName(m).toLowerCase())}</p><p class="v">${esc(who(monthDebt).replace('Ви в розрахунку', '0 зл'))}</p></div>`;
+  $('#debt-note').textContent = `Спільні за ${m.name.toLowerCase()}: ${money(sum)}, тобто по ${money(sum / 2)} на кожного` +
+    (Math.abs(cur.settled) >= 0.005 ? `; переказано між вами ${money(Math.abs(cur.settled))}.` : '. Переказів між вами цього місяця не було.');
+}
+
+function render() { texts(); tiles(); debt(); categoryBars(); heat(); rateLine(); stack(); }
 
 function select(i) { sel = i; render(); }
 
@@ -703,6 +730,15 @@ PAGE = """<!doctype html>
 
   <nav class="switch" id="switch" aria-label="Місяць"></nav>
 
+  <article class="card" id="debt" hidden>
+    <h2>Хто кому винен за спільне</h2>
+    <p class="sub">Оренда, продукти, світло й домашній інтернет — навпіл. Перекази між вами закривають борг.</p>
+    <p class="debt-total" id="debt-total"></p>
+    <p class="sub" id="debt-since"></p>
+    <section class="tiles" id="debt-month" aria-label="Спільні витрати за місяць"></section>
+    <p class="concl" id="debt-note"></p>
+  </article>
+
   <section class="tiles" id="tiles" aria-label="Головні цифри"></section>
 
   <article class="card">
@@ -740,9 +776,29 @@ PAGE = """<!doctype html>
 """
 
 
-def render(views):
+def shared_summary(conn, saved):
+    """Хто скільки заплатив за спільне (тег #shared) і скільки переказали одне одному, по місяцях.
+
+    Кожен переказ між партнерами видно в обох виписках (у платника +, в отримувача −),
+    тому сума «від Марка до Олі» = (Марко − Оля) / 2.
+    """
+    def by_month(name, owner, column):
+        cursor = conn.execute(for_owner(saved[name], owner))
+        cols = [c.name for c in cursor.description]
+        return {f"{r['month']:%Y-%m}": float(r[column]) for r in (dict(zip(cols, row)) for row in cursor.fetchall())}
+    for name in (Q_SHARED, Q_SETTLE):
+        if name not in saved:
+            raise SystemExit(f"У main.beancount немає збереженого запиту «{name}».")
+    paid = {o: by_month(Q_SHARED, o, "shared") for o in ("olya", "marko")}
+    sent = {o: by_month(Q_SETTLE, o, "settled") for o in ("olya", "marko")}
+    keys = sorted(set().union(*paid.values(), *sent.values()))
+    return {k: {"olya": paid["olya"].get(k, 0.0), "marko": paid["marko"].get(k, 0.0),
+                "settled": (sent["marko"].get(k, 0.0) - sent["olya"].get(k, 0.0)) / 2} for k in keys}
+
+
+def render(views, shared=None):
     """views — [{key, label, …page_data}] для Олі, Марка і разом; перший — звіт за замовчуванням."""
-    payload = json.dumps({"views": views}, ensure_ascii=False).replace("</", "<\\/")
+    payload = json.dumps({"views": views, "shared": shared or {}}, ensure_ascii=False).replace("</", "<\\/")
     return (PAGE.replace("__CSS__", CSS)
                 .replace("__JS__", JS)
                 .replace("__DATA__", payload)
@@ -765,7 +821,10 @@ def main():
         c = cushion(results, months)
         print(f"  Подушка {c['now_at']}: {c['now']:.2f} з {c['target']:.2f}, "
               f"буде: {c['reach'] or '—'}, треба на місяць: {c['needed']:.2f}")
-    OUTPUT.write_text(render(views), encoding="utf-8")
+    shared = shared_summary(conn, saved)
+    for k, v in shared.items():
+        print(f"  Спільне {k}: Оля {v['olya']:.2f}, Марко {v['marko']:.2f}, переказ Марко→Оля {v['settled']:.2f}")
+    OUTPUT.write_text(render(views, shared), encoding="utf-8")
     print(f"Записано {OUTPUT.name}.")
 
 

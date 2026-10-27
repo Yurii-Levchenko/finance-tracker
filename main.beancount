@@ -10,6 +10,8 @@ option "operating_currency" "PLN"
 ; Готівка: витрати з неї додають з телефона на сторінці app.py (стартовий залишок 0).
 2026-07-31 open Assets:Готівка:Оля            PLN
 2026-07-31 open Assets:Готівка:Марко          PLN
+; Перекази між Олею й Марком: не дохід і не витрата, а розрахунок за спільні витрати.
+2026-07-31 open Assets:Розрахунки-Пари        PLN
 2026-07-31 open Equity:Початковий-Залишок     PLN
 
 2026-07-31 open Income:Зарплата               PLN
@@ -74,6 +76,20 @@ option "operating_currency" "PLN"
 2026-07-31 query "5 Рух по рахунках" "
   SELECT yearmonth(date) AS month, sum(number) AS change, max(date) AS last_operation
   WHERE root(account, 1) = 'Assets'
+  GROUP BY month
+  ORDER BY month"
+
+; Спільні витрати (тег #shared): сума за місяць; хто платив — фільтр за тегом власника.
+2026-07-31 query "6 Спільні витрати" "
+  SELECT yearmonth(date) AS month, sum(number) AS shared
+  WHERE 'shared' IN tags AND root(account, 1) = 'Expenses'
+  GROUP BY month
+  ORDER BY month"
+
+; Перекази між партнерами за місяць (кожен переказ видно в обох виписках: у платника +, в отримувача −).
+2026-07-31 query "7 Розрахунки між партнерами" "
+  SELECT yearmonth(date) AS month, sum(number) AS settled
+  WHERE account = 'Assets:Розрахунки-Пари'
   GROUP BY month
   ORDER BY month"
 

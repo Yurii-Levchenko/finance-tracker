@@ -1,33 +1,34 @@
-шаблон,рахунок,фіксована
-Rent,Expenses:Житло,так
-Salary,Income:Зарплата,ні
-Biedronka,Expenses:Продукти,ні
-Lidl,Expenses:Продукти,ні
-Żabka,Expenses:Продукти,ні
-Carrefour,Expenses:Продукти,ні
-Bar Mleczny,Expenses:Кафе,ні
-Starbucks,Expenses:Кафе,ні
-Bolt Food,Expenses:Доставка-Їжі,ні
-Wolt,Expenses:Доставка-Їжі,ні
-Bolt,Expenses:Транспорт,ні
-Uber,Expenses:Транспорт,ні
-ZTM,Expenses:Транспорт,так
-Netflix,Expenses:Підписки,так
-Spotify,Expenses:Підписки,так
-Claude.ai,Expenses:Підписки,так
-Play — abonament,Expenses:Звязок,так
-Rossmann,Expenses:Дім-і-Косметика,ні
-Decathlon,Expenses:Спорт,ні
-WYNAGRODZENIE,Income:Зарплата,ні
-ORANGE POLSKA,Expenses:Звязок,так
-PGE OBRÓT,Expenses:Комунальні,так
-ZDROFIT,Expenses:Спорт,так
-YOUTUBE PREMIUM,Expenses:Підписки,так
-PYSZNE.PL,Expenses:Доставка-Їжі,ні
-KAUFLAND,Expenses:Продукти,ні
-AUCHAN,Expenses:Продукти,ні
-COSTA COFFEE,Expenses:Кафе,ні
-MANEKIN,Expenses:Кафе,ні
-SUPER-PHARM,Expenses:Дім-і-Косметика,ні
-STEAMGAMES,Expenses:Розваги,ні
-ALLEGRO,Expenses:Покупки,ні
+шаблон,рахунок,фіксована,спільна
+Rent,Expenses:Житло,так,так
+Salary,Income:Зарплата,ні,ні
+Biedronka,Expenses:Продукти,ні,так
+Lidl,Expenses:Продукти,ні,так
+Żabka,Expenses:Продукти,ні,так
+Carrefour,Expenses:Продукти,ні,так
+Bar Mleczny,Expenses:Кафе,ні,ні
+Starbucks,Expenses:Кафе,ні,ні
+Bolt Food,Expenses:Доставка-Їжі,ні,ні
+Wolt,Expenses:Доставка-Їжі,ні,ні
+Bolt,Expenses:Транспорт,ні,ні
+Uber,Expenses:Транспорт,ні,ні
+ZTM,Expenses:Транспорт,так,ні
+Netflix,Expenses:Підписки,так,ні
+Spotify,Expenses:Підписки,так,ні
+Claude.ai,Expenses:Підписки,так,ні
+Play — abonament,Expenses:Звязок,так,ні
+Rossmann,Expenses:Дім-і-Косметика,ні,ні
+Decathlon,Expenses:Спорт,ні,ні
+WYNAGRODZENIE,Income:Зарплата,ні,ні
+ŚWIATŁOWÓD,Expenses:Звязок,так,так
+ORANGE POLSKA,Expenses:Звязок,так,ні
+PGE OBRÓT,Expenses:Комунальні,так,так
+ZDROFIT,Expenses:Спорт,так,ні
+YOUTUBE PREMIUM,Expenses:Підписки,так,ні
+PYSZNE.PL,Expenses:Доставка-Їжі,ні,ні
+KAUFLAND,Expenses:Продукти,ні,так
+AUCHAN,Expenses:Продукти,ні,так
+COSTA COFFEE,Expenses:Кафе,ні,ні
+MANEKIN,Expenses:Кафе,ні,ні
+SUPER-PHARM,Expenses:Дім-і-Косметика,ні,ні
+STEAMGAMES,Expenses:Розваги,ні,ні
+ALLEGRO,Expenses:Покупки,ні,ні

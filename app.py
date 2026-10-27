@@ -122,6 +122,14 @@ def quick_hints(user, operations, expense):
     return top, memory
 
 
+def shared_default_categories():
+    """Категорії, де всі правила в rules.csv позначені як спільні (Житло, Продукти, Комунальні)."""
+    by_cat = {}
+    for _, account, _, shared in bank_import.load_rules():
+        by_cat.setdefault(account, []).append(shared)
+    return [c for c, flags in by_cat.items() if c.startswith("Expenses:") and all(flags)]
+
+
 def state(user=None):
     known = main_accounts()
     accounts = manual.read_accounts()
@@ -139,6 +147,8 @@ def state(user=None):
         "income": [a for a in known if a.startswith("Income:")] + [a for a in mine if a.startswith("Income:")],
         "assets": cash + [a for a in mine if a.startswith("Assets:")],
         "today": str(dt.date.today()),
+        "shared_default": shared_default_categories(),
+        "partner": {"olya": "Марком", "marko": "Олею"}.get(user, "партнером"),
         **dict(zip(("top_categories", "memory"), quick_hints(user, operations, expense))),
     }
 
@@ -166,6 +176,7 @@ def save_operation(body, user):
     ops = manual.read_operations()
     op = {k: str(body.get(k, "")).strip() for k in manual.MANUAL_FIELDS}
     op["хто"] = user
+    op["спільна"] = "так" if op["тип"] == "витрата" and body.get("спільна") in (True, "так") else "ні"
     op["фіксована"] = "так" if op["тип"] == "витрата" and body.get("фіксована") in (True, "так") else "ні"
     if op["сума"]:
         try:
@@ -653,6 +664,7 @@ __NAV__
     <datalist id="desc-list"></datalist>
     <div class="full"><span class="hint" id="chips-label">Категорія</span><div class="chips" id="cat-chips"></div></div>
     <label class="full"><span id="cat-label">Або інша категорія</span><select name="категорія" required></select></label>
+    <label class="check full" id="shared-box"><input type="checkbox" name="спільна"> <span id="shared-label">Спільна, навпіл</span></label>
     <details class="full extra" id="extra"><summary><span id="extra-sum"></span> · змінити</summary>
       <div class="inner">
         <label><span id="acc-label">З якого рахунку</span><select name="рахунок" required></select></label>
@@ -739,6 +751,8 @@ function syncOpForm(keep) {
   $('#cat-label').textContent = k === 'витрата' ? 'Або інша категорія' : 'Або інше джерело';
   $('#acc-label').textContent = k === 'витрата' ? 'З якого рахунку' : 'На який рахунок';
   $('#fixed-box').hidden = k !== 'витрата';
+  $('#shared-box').hidden = k !== 'витрата';
+  $('#shared-label').textContent = `Спільна з ${S.partner}, навпіл`;
   // Кнопки найчастіших категорій: вибір в один дотик.
   const top = k === 'витрата' ? S.top_categories : S.income.slice(0, 4);
   $('#chips-label').textContent = k === 'витрата' ? 'Категорія' : 'Джерело доходу';
@@ -750,9 +764,11 @@ function syncOpForm(keep) {
   $('#op-save').disabled = none;
 }
 
+let sharedTouched = false;  // якщо людина сама клацнула «спільна», не перебиваємо її вибір
 function markChip() {
   const v = opForm.elements['категорія'].value;
   document.querySelectorAll('#cat-chips button').forEach(b => b.classList.toggle('on', b.dataset.cat === v));
+  if (!sharedTouched && opKind() === 'витрата') opForm.elements['спільна'].checked = S.shared_default.includes(v);
 }
 function extraSummary() {
   const acc = opForm.elements['рахунок'].value, d = opForm.elements['дата'].value;
@@ -772,7 +788,7 @@ function renderOps() {
   $('#ops').innerHTML = ops.length ? `<table class="list"><thead><tr><th>Дата</th><th>Опис</th><th>Категорія</th><th>Рахунок</th><th style="text-align:right">Сума</th><th></th></tr></thead><tbody>` +
     ops.map(o => {
       const neg = o['тип'] === 'витрата';
-      return `<tr class="${editOp === o.id ? 'editing' : ''}"><td>${esc(o['дата'])}</td><td>${esc(o['опис'])}${o['фіксована'] === 'так' ? '<span class="tag">фіксована</span>' : ''}</td>
+      return `<tr class="${editOp === o.id ? 'editing' : ''}"><td>${esc(o['дата'])}</td><td>${esc(o['опис'])}${o['фіксована'] === 'так' ? '<span class="tag">фіксована</span>' : ''}${o['спільна'] === 'так' ? '<span class="tag">спільна</span>' : ''}</td>
         <td>${esc(short(o['категорія']))}</td><td>${esc(short(o['рахунок']))}</td>
         <td class="num ${neg ? 'neg' : 'pos'}">${neg ? '−' : '+'}${money(+o['сума'])}</td>
         <td class="acts"><button class="link" data-edit-op="${o.id}">Змінити</button><button class="link danger" data-del-op="${o.id}">Видалити</button></td></tr>`;
@@ -798,7 +814,7 @@ function syncAccForm() {
 }
 
 function resetOp(focus) {
-  editOp = null; opForm.reset(); opForm.elements['дата'].value = S.today; $('#extra').open = false;
+  editOp = null; sharedTouched = false; opForm.reset(); opForm.elements['дата'].value = S.today; $('#extra').open = false;
   $('#op-title').textContent = 'Нова операція'; $('#op-save').textContent = 'Зберегти'; $('#op-cancel').hidden = true;
   syncOpForm(); renderOps();
   if (focus) opForm.elements['сума'].focus();
@@ -815,6 +831,7 @@ opForm.addEventListener('change', e => {
   if (e.target.name === 'категорія') markChip();
   if (e.target.name === 'рахунок' || e.target.name === 'дата') extraSummary();
   if (e.target.name === 'опис') rememberCategory();
+  if (e.target.name === 'спільна') sharedTouched = true;
 });
 opForm.elements['опис'].addEventListener('input', rememberCategory);
 // Enter у сумі веде до опису, а не відправляє форму.
@@ -826,7 +843,7 @@ $('#acc-cancel').onclick = resetAcc;
 opForm.addEventListener('submit', async e => {
   e.preventDefault();
   const body = {id: editOp || ''};
-  ['тип', 'дата', 'сума', 'опис', 'категорія', 'рахунок', 'фіксована'].forEach(n => body[n] = n === 'тип' ? opKind() : val(opForm, n));
+  ['тип', 'дата', 'сума', 'опис', 'категорія', 'рахунок', 'фіксована', 'спільна'].forEach(n => body[n] = n === 'тип' ? opKind() : val(opForm, n));
   const before = new Set(S.operations.map(o => o.id)), editing = editOp;
   const btn = $('#op-save'); btn.disabled = true; btn.textContent = 'Зберігаю…';
   const what = `${body['опис']}, ${money(+String(body['сума']).replace(',', '.'))}`;
@@ -857,6 +874,7 @@ document.addEventListener('click', async e => {
     ['дата', 'опис'].forEach(n => opForm.elements[n].value = o[n]);
     opForm.elements['сума'].value = String(o['сума']).replace('.', ',');
     opForm.elements['фіксована'].checked = o['фіксована'] === 'так';
+    opForm.elements['спільна'].checked = o['спільна'] === 'так'; sharedTouched = true;
     $('#op-title').textContent = 'Змінити операцію'; $('#op-save').textContent = 'Зберегти зміни'; $('#op-cancel').hidden = false;
     $('#extra').open = true; extraSummary(); markChip();
     renderOps(); opForm.scrollIntoView({behavior: 'smooth', block: 'start'}); opForm.elements['сума'].focus({preventScroll: true});
